@@ -1,0 +1,4574 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#1b1c1e">
+<title>LIFEPAK 15 Simulator — V-Fib Training</title>
+<!-- Installable web app (Android: Chrome/Edge "Install app" / "Add to Home screen").
+     These files sit next to this page when it's hosted; opened on its own
+     the page still works, the links are simply ignored. -->
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<style>
+  :root{
+    --bezel: #3a3d3f;
+    --bezel-dark: #232527;
+    --screen-bg: #000000;
+    --ecg-green: #35e335;
+    --spo2-blue: #4db8ff;
+    --co2-amber: #ffb020;
+    --art-white: #e8e8e8;
+    --nibp-white: #d8d8d8;
+    --text-dim: #9aa0a3;
+    --panel-btn: #55585a;
+    --panel-btn-dark: #3f4244;
+  }
+  *{box-sizing:border-box;}
+  html,body{
+    margin:0; padding:0; height:100%;
+    background:#1b1c1e;
+    display:flex; align-items:center; justify-content:center;
+    font-family: 'Arial', 'Helvetica Neue', sans-serif;
+    overscroll-behavior: none;
+    touch-action: manipulation; /* kills double-tap-zoom delay on buttons; pinch-zoom still works */
+    -webkit-tap-highlight-color: transparent;
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+  /* Keep the device clear of the notch / home indicator. applyDeviceScale()
+     reads these resolved paddings back so the scale-to-fit uses only the
+     truly visible area. */
+  body{
+    padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px)
+             env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+  }
+  /* Long-press on a control shouldn't start a text selection, show the
+     iOS magnifier, or pop the "Copy / Look Up" callout mid-scenario. */
+  .device, .modal-box, .determinant-popover, .rotate-hint{
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+  /* Sized by JS to the scaled-down footprint of .device so the page never
+     reserves the full 980px design width/height on a small screen; hidden
+     until the first scale pass runs so there's no flash of full-size
+     content before JS measures and shrinks it. */
+  .device-scale-wrap{
+    visibility: hidden;
+    position: relative;
+    flex-shrink: 0;
+    /* The unscaled 980px layout box would otherwise spill past the screen
+       edge, and mobile Safari responds by zooming the whole page out —
+       which is what was pushing the top of the device off-screen. */
+    overflow: hidden;
+    /* Zero until the first scale pass sets real dimensions, so the 980px
+       device never widens the page before JS has measured it. */
+    width: 0;
+    height: 0;
+  }
+  .device-scale-wrap.scaled{
+    visibility: visible;
+  }
+  .device{
+    width: 997px; /* widened 17px for the 1/2/3 number column */
+    background: linear-gradient(180deg, #4a4d4f 0%, #2f3133 100%);
+    border-radius: 26px;
+    padding: 18px 24px 20px;
+    box-shadow: 0 30px 60px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.08);
+    position: relative;
+  }
+  .top-row{
+    display:flex;
+    gap: 14px;
+  }
+  .left-cluster, .right-cluster{
+    background: var(--bezel-dark);
+    border-radius: 14px;
+    padding: 12px 10px;
+    display:flex;
+    flex-direction:column;
+    gap:10px;
+    /* 91.5px inner width = one right-cluster button column ((210 - 20 - 7) / 2),
+       so the left buttons come out exactly the same size as the right ones. */
+    width: 111.5px;
+  }
+  /* Single column, same spacing as the right-side button grid */
+  .side-btn-group{
+    margin-top: auto;
+    display:flex;
+    flex-direction:column;
+    gap:7px;
+  }
+  .determinant-panel{
+    display:flex;
+    flex-direction:column;
+    gap:7px;
+  }
+  /* Each determinant is a full-width tile: the whole tile is the touch
+     target, the LED sits at the left edge like a real status lamp. */
+  .determinant-row{
+    position:relative;
+    display:flex;
+    align-items:center;
+    gap:7px;
+    cursor:pointer;
+    min-height:46px;
+    padding:6px 8px;
+    border-radius:8px;
+    user-select:none;
+    background: linear-gradient(180deg,#34373a,#2a2c2e);
+    border:1px solid #3d4043;
+    box-shadow: 0 2px 0 rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.06);
+    transition: filter 0.1s ease, transform 0.1s ease;
+  }
+  #cessationRow{
+    border-color:#5a3434;
+  }
+  .determinant-circle{
+    width:13px;
+    height:13px;
+    border-radius:50%;
+    background:#3a3d3f;
+    border:1px solid #57595b;
+    box-shadow: inset 0 1px 2px rgba(0,0,0,0.5);
+    flex-shrink:0;
+    transition: background 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+  }
+  .determinant-circle.active{
+    background:#2ecc71;
+    border-color:#2ecc71;
+    box-shadow: 0 0 6px rgba(46,204,113,0.9), inset 0 1px 2px rgba(0,0,0,0.3);
+  }
+  .determinant-circle.alert-red{
+    background:#ff4d4d;
+    border-color:#ff4d4d;
+    box-shadow: 0 0 6px rgba(255,77,77,0.9), inset 0 1px 2px rgba(0,0,0,0.3);
+  }
+  .determinant-circle.pending{
+    background:#2ecc71;
+    border-color:#2ecc71;
+    animation: determinantPendingBlink 0.8s steps(1) infinite;
+  }
+  @keyframes determinantPendingBlink{
+    0%, 50%{
+      opacity:1;
+      box-shadow: 0 0 6px rgba(46,204,113,0.9), inset 0 1px 2px rgba(0,0,0,0.3);
+    }
+    51%, 100%{
+      opacity:0.3;
+      box-shadow:none;
+    }
+  }
+  .determinant-label{
+    font-size:11px;
+    color:#d6d9da;
+    font-weight:700;
+    line-height:1.2;
+  }
+  /* Pickers (BVM rate, airway, amiodarone dose). At startup the script
+     moves these out of the scaled device and into <body>, so they render
+     at full size and their hit areas line up with what's drawn — popovers
+     living inside the CSS-transformed device drift out of alignment. */
+  .picker-backdrop{
+    display:none;
+    position:fixed;
+    inset:0;
+    background:rgba(0,0,0,0.55);
+    z-index:1090;
+  }
+  .picker-backdrop.show{ display:block; }
+  .determinant-popover{
+    display:none;
+    position:fixed;
+    left:50%;
+    top:50%;
+    transform:translate(-50%,-50%);
+    background:#1f2123;
+    border:1px solid #444;
+    border-radius:14px;
+    padding:16px;
+    box-shadow:0 20px 50px rgba(0,0,0,0.6);
+    z-index:1100;
+    width:min(340px, calc(100vw - 32px));
+    max-height:calc(100vh - 32px);
+    overflow-y:auto;
+  }
+  .determinant-popover.open{ display:block; }
+  .determinant-popover-title{
+    font-size:15px;
+    font-weight:700;
+    color:#e6e8e9;
+    margin-bottom:12px;
+  }
+  .determinant-popover-grid{
+    display:grid;
+    grid-template-columns:repeat(4, 1fr);
+    gap:8px;
+  }
+  #airwayPopover .determinant-popover-grid{
+    grid-template-columns:1fr 1fr;
+  }
+  .determinant-popover-grid button{
+    background: linear-gradient(180deg,#5c5f61,#45484a);
+    color:#eee;
+    border:none;
+    border-radius:8px;
+    min-height:48px;
+    padding:8px 4px;
+    font-size:16px;
+    font-weight:700;
+    cursor:pointer;
+    box-shadow: 0 2px 0 rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.15);
+  }
+  .determinant-popover .picker-cancel{
+    display:block;
+    width:100%;
+    min-height:44px;
+    margin-top:10px;
+    background:none;
+    border:none;
+    color:#9aa0a3;
+    font-size:14px;
+    font-weight:600;
+    cursor:pointer;
+  }
+  .determinant-popover-grid button.off-btn{
+    grid-column: 1 / -1;
+    background: linear-gradient(180deg,#7a3a3a,#5a2424);
+  }
+  /* Left-column buttons share .row-btn with the right cluster (same
+     height, font, gradient). CODE SUMMARY is the one label too long for a
+     single line at that width, so it wraps to two tight lines that still
+     fit inside the same 32px height. */
+  .side-btn{ height:32px; }
+  .side-btn.two-line{
+    white-space:normal;
+    line-height:1.05;
+  }
+  .screen-wrap{
+    flex:1;
+    background: #111;
+    border-radius: 8px;
+    padding: 10px;
+    box-shadow: inset 0 0 0 3px #050505, inset 0 0 20px rgba(0,0,0,0.8);
+    overflow: hidden;
+    display:flex;
+    flex-direction:column;
+    position: relative;
+  }
+  .screen-off-overlay{
+    position:absolute;
+    inset:0;
+    background:#000;
+    border-radius:8px;
+    z-index:40;
+    display:none;
+  }
+  #deviceRoot.powered-off .screen-off-overlay{
+    display:block;
+  }
+  /* Screen off: the LCD content and the right-hand controls (including the
+     speed dial) go inert — only ON, HOME (scenario menu) and the left-panel
+     buttons such as CODE SUMMARY stay live, so the trainee can power on or
+     review a prior debrief from a blank screen. */
+  #deviceRoot.powered-off .screen-body,
+  #deviceRoot.powered-off .right-cluster{
+    pointer-events:none;
+  }
+  #deviceRoot.powered-off #onResetBtn,
+  #deviceRoot.powered-off #homeBtn{
+    pointer-events:auto;
+  }
+  /* No header strip: the timer and the three status boxes float over the
+     top of the screen, so the vitals and traces run to the top edge.
+     Timer centred; boxes top-right, right to left: energy, battery, Bluetooth. */
+  .screen-header{
+    position:absolute;
+    top:10px;      /* matches .screen-wrap padding */
+    left:10px;
+    right:10px;
+    z-index:5;     /* above the traces, below the screen-off overlay and alerts */
+    display:grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items:start;
+    color:#d8d8d8;
+    pointer-events:none;
+  }
+  .screen-header .clock{
+    grid-column: 2;
+    margin-top:4px;
+    text-shadow:0 0 4px #000, 0 0 2px #000;
+    font-size:16px;
+    font-weight:700;
+    letter-spacing:1px;
+    font-variant-numeric: tabular-nums;
+  }
+  .header-icons{
+    grid-column: 3;
+    justify-self: end;
+    display:flex;
+    align-items:stretch;
+    gap:5px;
+  }
+  .status-box{
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    gap:5px;
+    height:34px;
+    padding:0 6px;
+    background:#161b22;
+    border:1px solid #7d8894;
+    border-radius:3px;
+    color:#e6edf5;
+  }
+  /* Bluetooth: status lamp + rune. Lamp is dark until the CPR sensor links. */
+  .bt-lamp{
+    width:10px;
+    height:10px;
+    border-radius:50%;
+    background:#2a2d30;
+    border:1px solid #555a5f;
+    transition: background 0.2s ease, box-shadow 0.2s ease;
+  }
+  .bt-lamp.connected{
+    background:#35e335;
+    border-color:#35e335;
+    box-shadow:0 0 5px rgba(53,227,53,0.9);
+  }
+  .bt-icon{ width:12px; height:20px; display:block; }
+  /* Battery: vertical cell, 4 bars, bottom bar is the last to go. */
+  .battery-icon{ width:16px; height:27px; display:block; }
+  .battery-icon .bar{ fill:#35e335; }
+  .battery-icon .bar.used{ fill:none; }
+  .battery-icon.empty .shell{ stroke:#ff4d4d; }
+  /* Energy: lightning bolt over the selected joules. */
+  .energy-box{
+    flex-direction:column;
+    gap:0;
+    padding:0 6px;
+    min-width:46px;
+  }
+  .energy-bolt{ width:17px; height:13px; display:block; }
+  .energy-box #joulesPill{
+    font-size:12px;
+    font-weight:700;
+    line-height:1;
+    font-variant-numeric: tabular-nums;
+  }
+  .screen-body{
+    display:flex;
+    gap:8px;
+    flex: 1 1 385px; /* at least the old fixed 385px; grows to match the taller button clusters */
+    min-height: 385px;
+  }
+  .vitals-col{
+    width: 168px;
+    display:flex;
+    flex-direction:column;
+    gap:3px;
+    min-height: 0;
+  }
+  .vital-box{
+    background:#000;
+    padding:4px 6px 6px;
+    border-bottom: 1px solid #1e1e1e;
+    flex: 1;
+    display:flex;
+    flex-direction:column;
+    justify-content:center;
+    min-height: 0;
+    position: relative;
+  }
+  .vital-label{
+    font-size:11px;
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+  }
+  .vital-label .name{ font-weight:700; letter-spacing:0.5px; }
+  .vital-value{
+    font-size:34px;
+    font-weight:700;
+    line-height:1.05;
+    font-variant-numeric: tabular-nums;
+  }
+  .vital-value.small{ font-size:26px; }
+  .hr-row{ color: var(--ecg-green); }
+  .hr-dashes{
+    font-size:30px;
+    letter-spacing:2px;
+    color: var(--ecg-green);
+    font-weight:700;
+  }
+  .spo2-row{ color: var(--spo2-blue); }
+  .co2-row .vital-label{ color: var(--co2-amber); }
+  .co2-values{ display:flex; gap:14px; }
+  .co2-values .co2-num{ color: var(--co2-amber); font-size:30px; font-weight:700; }
+  .co2-rr{
+    position:absolute;
+    bottom:4px;
+    right:6px;
+    font-size:11px;
+    color: var(--co2-amber);
+    font-weight:600;
+    opacity:0.85;
+  }
+  .nibp-row .vital-label{ color: var(--nibp-white); }
+  .nibp-dashes{ color: var(--nibp-white); font-size:24px; font-weight:700; letter-spacing:2px; }
+  .nibp-map{
+    color: var(--nibp-white);
+    font-size:11px;
+    font-weight:600;
+    text-align:left;
+    margin-top:2px;
+    opacity:0.85;
+  }
+
+  .traces-col{
+    flex:1;
+    display:flex;
+    flex-direction:column;
+    background:#000;
+    position:relative;
+    min-height: 0;
+  }
+  /* Event banner: bar along the bottom of the waveform area showing the
+     last event given and the time it was given, in yellow, as on the device. */
+  .event-banner{
+    position:absolute;
+    left:0; right:0; bottom:0;
+    height:26px;
+    display:none;
+    align-items:center;
+    justify-content:center;
+    gap:18px;
+    background:#56648a;
+    border-top:1px solid #7f8cb0;
+    color:#f2df3a;
+    font-family: Arial, 'Helvetica Neue', sans-serif;
+    font-size:14px;
+    font-weight:700;
+    z-index:6;
+    pointer-events:none;
+    font-variant-numeric: tabular-nums;
+  }
+  .event-banner.show{ display:flex; }
+  .trace-block{
+    position:relative;
+    border-bottom: 1px solid #1c1c1c;
+    min-height: 0;
+    overflow: hidden;
+  }
+  .trace-topinfo{
+    display:flex;
+    justify-content:space-between;
+    font-size:11px;
+    color:#999;
+    padding: 2px 4px 0;
+  }
+  .ecg-scale{
+    position:absolute;
+    left:4px; top:16px;
+    font-size:9px;
+    color:#4a4a4a;
+    display:flex;
+    flex-direction:column;
+    justify-content:space-between;
+    height: 130px;
+  }
+  canvas{ display:block; width:100%; height:100%; }
+  .clock{ color:#ddd; font-size:12px; letter-spacing:0.5px; }
+  @keyframes blinkAlarm{
+    0%,50%{ opacity:1; }
+    51%,100%{ opacity:0.25; }
+  }
+
+  /* Button | number | button. Button columns are fixed at the size every
+     other button uses; the number column sits between them, so 2 and 3
+     land just right of CPR and ANALYZE, left of their own buttons. */
+  .btn-grid{
+    display:grid;
+    grid-template-columns: 91.5px 16px 91.5px;
+    grid-template-rows: repeat(9, auto); /* explicit lines so the group panels below can target rows */
+    column-gap:4px;
+    row-gap:7px;
+    position:relative;
+    margin-top:2px;
+  }
+  .grid-cell{
+    display:flex;
+    align-items:center;
+    justify-content:center;
+  }
+  .grid-cell .row-btn{ width:100%; }
+  /* Light-grey rounded panels behind related controls. Absolutely
+     positioned grid children: they take their size from the grid area
+     but don't take part in placement, so no button moves. */
+  .btn-group-bg{
+    position:absolute;
+    grid-column:3;
+    inset:-2px -4px; /* leaves a 3px split between the two panels */
+    background:#76797c;
+    border-radius:10px;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.12), 0 1px 0 rgba(0,0,0,0.35);
+    z-index:0;
+    pointer-events:none;
+  }
+  .btn-group-bg.defib{ grid-row:2 / 6; } /* Energy Select, CHARGE, SHOCK */
+  .btn-group-bg.pacing{ grid-row:6 / 10; } /* PACER, RATE, CURRENT, PAUSE */
+  .btn-grid > .grid-cell{ position:relative; z-index:1; }
+  .num-cell .num{
+    color:#fff;
+    font-size:14px;
+    font-weight:800;
+    line-height:1;
+  }
+  .shock-cell{
+    grid-row: span 2;
+    align-self: stretch;
+  }
+  .lead-size-row{
+    display:flex;
+    gap:4px;
+    width:100%;
+  }
+  .mini-btn{
+    flex:1;
+    background: linear-gradient(180deg,#5c5f61,#45484a);
+    border-radius:6px;
+    min-height:32px;
+    padding:4px 2px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-size:9px;
+    font-weight:600;
+    color:#eee;
+    box-shadow: 0 2px 0 rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.15);
+  }
+  /* ON is always green; the small lamp at its right edge is the power
+     indicator — dark when off, lit when the monitor is actually on. */
+  .row-btn.on-btn{ /* .row-btn.on-btn so it beats the grey .row-btn rule defined later */
+    position:relative;
+    justify-content:center;
+    font-weight:800;
+    background: linear-gradient(180deg,#3ecb5e,#1f8f3d);
+    color:#04210c;
+  }
+  .on-btn.powered .status-light{
+    background:#f4fff0;
+    border-color:#f4fff0;
+    box-shadow:0 0 6px 1px #eaffd8;
+  }
+  .on-btn:not(.powered) .status-light{
+    background:#1f5a31;
+    border-color:#17452a;
+  }
+  .row-btn{
+    position:relative;
+    display:flex;
+    align-items:center;
+    justify-content:center; /* every button label centred */
+    text-align:center;      /* and each line of a two-line label (CODE SUMMARY) */
+    gap:6px;
+    background: linear-gradient(180deg,#5c5f61,#45484a);
+    border-radius:8px;
+    min-height:32px;
+    padding:4px 8px;
+    white-space:nowrap;
+    font-size:10.5px;
+    color:#eee;
+    font-weight:600;
+    box-shadow: 0 2px 0 rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.15);
+  }
+  .row-btn .num{
+    background:#222;
+    color:#fff;
+    border-radius:50%;
+    width:14px;height:14px;
+    font-size:9px;
+    display:flex;align-items:center;justify-content:center;
+    flex-shrink:0;
+  }
+  /* Indicator lights sit at the left edge of their button, out of the
+     flow, so the label stays centred. Dark by default; .lit turns one on. */
+  .status-light{
+    position:absolute;
+    left:9px;
+    top:50%;
+    margin-top:-4px;
+    width:8px;height:8px;border-radius:50%;
+    background:#2b2d2f;
+    border:1px solid #1c1d1e;
+    box-shadow: inset 0 1px 1px rgba(0,0,0,0.6);
+    flex-shrink:0;
+  }
+  .status-light.lit{
+    background:#2ecc40;
+    border-color:#2ecc40;
+    box-shadow:0 0 5px #2ecc40;
+  }
+  #energySelectRow.locked{ opacity:0.45; }
+  #energySelectRow.locked .arrow-btn{ cursor:not-allowed; pointer-events:none; }
+  #energySelectRow{ padding-left:4px; padding-right:4px; gap:1px; }
+  /* Tighter layout footprint so "Energy Select" fits between the arrows;
+     the tappable area (padding) stays the same size. */
+  #energySelectRow .arrow-btn{ margin:-12px -8px; }
+  .energy-select-label{
+    text-align:center;
+    line-height:1.05;
+    font-size:10px;
+    font-weight:700;
+    white-space:nowrap;
+  }
+  /* Arrows keep their small glyph but get a large invisible hit area that
+     reaches the edges of the row. */
+  .arrow-btn{
+    cursor:pointer;
+    user-select:none;
+    padding: 12px 9px;
+    margin: -12px -6px;
+    border-radius:6px;
+    line-height:1;
+    font-size:11px;
+  }
+  .arrow-btn:active{
+    background: rgba(255,255,255,0.15);
+  }
+  .row-btn.charge-btn{
+    background: linear-gradient(180deg,#e8b020,#c98a10);
+    color:#3a2500;
+    justify-content:center;
+    text-align:center;
+    font-weight:800;
+    cursor:pointer;
+    user-select:none;
+  }
+  .charge-btn.charging{
+    animation: chargePulse 0.5s ease-in-out infinite alternate;
+  }
+  /* .ready: no change on the CHARGE button itself — the glowing SHOCK
+     button is the ready cue. */
+  .charge-btn.disabled{
+    opacity:0.45;
+    cursor:not-allowed;
+    animation:none;
+  }
+  @keyframes chargePulse{
+    from{ filter:brightness(0.85); }
+    to{ filter:brightness(1.25); }
+  }
+  /* Red at all times; it glows once the device is charged and ready to shock. */
+  .shock-btn{
+    position:relative;
+    z-index:1;
+    background: radial-gradient(circle at 35% 30%, #ef5a4f, #c8261e 65%, #9a1510);
+    border-radius:50%;
+    width:62px;height:62px;
+    border:2px solid #f2d4cf; /* light rim, as on the device */
+    display:flex;align-items:center;justify-content:center;
+    box-shadow: 0 3px 6px rgba(0,0,0,0.5), inset 0 1px 2px rgba(255,255,255,0.3);
+    font-size:22px;
+    cursor:not-allowed;
+    transition: all 0.15s ease;
+  }
+  .shock-bolt{
+    width:30px;
+    height:38px;
+    display:block;
+    filter: drop-shadow(0 1px 0 rgba(0,0,0,0.25));
+    pointer-events:none;
+  }
+  .shock-btn.ready{
+    cursor:pointer;
+    opacity:1;
+    animation: shockGlow 0.6s ease-in-out infinite alternate;
+  }
+  @keyframes shockGlow{
+    from{ box-shadow:0 3px 6px rgba(0,0,0,0.5), 0 0 6px 2px rgba(255,70,50,0.5); }
+    to{ box-shadow:0 3px 6px rgba(0,0,0,0.5), 0 0 18px 8px rgba(255,70,50,0.95); }
+  }
+  .shock-btn:active.ready{ transform: scale(0.92); }
+  .flash-overlay{
+    position:fixed;
+    inset:0;
+    background:#fff;
+    opacity:0;
+    pointer-events:none;
+    z-index:999;
+  }
+  .flash-overlay.flashing{
+    animation: flashOnce 0.35s ease-out;
+  }
+  @keyframes flashOnce{
+    0%{ opacity:0.9; }
+    100%{ opacity:0; }
+  }
+  .event-log{
+    margin-top: 10px;
+    background:#0b0c0d;
+    border:1px solid #333;
+    border-radius:6px;
+    padding: 6px 10px;
+    font-size:11px;
+    color:#ffb020;
+    letter-spacing:0.4px;
+    text-align:center;
+    min-height:14px;
+  }
+  /* Home sits directly under EVENT (centred on the left button column);
+     the speed dial sits below and to the right of it, as on the device. */
+  .dial-row{
+    display:flex;
+    align-items:flex-start;
+    gap:7px;
+    margin-top:10px;
+  }
+  .dial-row .home-cell{
+    width:91.5px; /* same width as the left button column, so home centres under EVENT */
+    display:flex;
+    justify-content:center;
+    flex-shrink:0;
+  }
+  .speed-dial-wrap{
+    flex:1;
+    margin-top:24px;
+    /* Nudged left so the dial sits closer to the middle of the right panel
+       while still clearing the home button above-left of it. */
+    position:relative;
+    left:-20px;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    gap:5px;
+  }
+  .home-btn{
+    width:38px;height:38px;
+    flex-shrink:0;
+    position:relative;
+    left:-10px; /* nudged up and left of centre-under-EVENT */
+    top:-4px;
+    border-radius:50%;
+    background: linear-gradient(180deg,#5c5f61,#45484a);
+    display:flex;align-items:center;justify-content:center;
+    color:#ccc;
+    font-size:17px;
+    cursor:pointer;
+    box-shadow: 0 2px 0 rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.15);
+  }
+  /* ---- Speed dial ----
+     Light-grey bezel, a large dark grip ring you drag round, and a knurled
+     centre knob you press. The ring (with the knob) rotates under the finger. */
+  .dial-assembly{
+    position:relative;
+    width:96px;
+    height:96px;
+    touch-action:none; /* dragging the dial must not scroll/zoom the page */
+  }
+  .dial-label-arc{
+    position:absolute;
+    left:-17px; top:-17px;
+    width:130px; height:130px;
+    pointer-events:none;
+    overflow:visible;
+  }
+  .dial-label-arc text{
+    fill:#e4e6e8;
+    font-size:8.5px;
+    font-weight:700;
+    letter-spacing:2.2px;
+    font-family: Arial, 'Helvetica Neue', sans-serif;
+  }
+  .dial-bezel{
+    width:96px; height:96px;
+    border-radius:50%;
+    padding:5px;
+    background: radial-gradient(circle at 40% 30%, #c3c8cd, #8e959c 70%, #737a81);
+    box-shadow: 0 3px 8px rgba(0,0,0,0.55), inset 0 1px 1px rgba(255,255,255,0.5);
+    cursor:grab;
+  }
+  .dial{
+    position:relative;
+    width:86px; height:86px;
+    border-radius:50%;
+    /* smooth dark face with a groove, fine grip ridges only in the outer band */
+    background:
+      radial-gradient(circle closest-side, #2b2e31 0%, #1c1d1f 55%, #151618 84%, transparent 84.5%),
+      radial-gradient(circle closest-side, transparent 60%, rgba(0,0,0,0.5) 61%, transparent 63%),
+      repeating-conic-gradient(from 0deg, #2c2f32 0deg 3deg, #121314 3deg 6deg);
+    box-shadow: inset 0 2px 3px rgba(255,255,255,0.12), inset 0 -3px 6px rgba(0,0,0,0.6), 0 1px 2px rgba(0,0,0,0.6);
+    will-change: transform;
+  }
+  .dial-assembly.dragging .dial-bezel{ cursor:grabbing; }
+  .dial-center{
+    position:absolute;
+    left:50%; top:50%;
+    width:36px; height:36px;
+    margin:-18px 0 0 -18px;
+    border-radius:50%;
+    /* domed knob face, knurled only round its rim */
+    background:
+      radial-gradient(circle closest-side, #33363a 0%, #1d1f21 55%, #17181a 74%, transparent 75%),
+      repeating-conic-gradient(#3a3d40 0deg 6deg, #141516 6deg 12deg);
+    box-shadow: 0 3px 5px rgba(0,0,0,0.7), inset 0 0 0 3px #1f2123, inset 0 1px 1px rgba(255,255,255,0.2);
+    cursor:pointer;
+  }
+  .dial-center:active{ transform:scale(0.93); box-shadow: 0 1px 2px rgba(0,0,0,0.7), inset 0 0 0 3px #1f2123; }
+
+  /* White selection border drawn over a vital or waveform box (overlay, so
+     the waveform canvas can't paint over it). */
+  .vital-box.dial-sel::after,
+  .trace-block.dial-sel::after{
+    content:'';
+    position:absolute;
+    inset:0;
+    border:2px solid #fff;
+    pointer-events:none;
+    z-index:4;
+  }
+  .vital-box.dial-picked::after,
+  .trace-block.dial-picked::after{ background:rgba(255,255,255,0.14); }
+  .status-bar{
+    margin-top: 16px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    gap: 10px;
+    color:#aaa;
+    font-size: 12px;
+  }
+  .status-bar .dot{
+    width:9px;height:9px;border-radius:50%;
+    background:#ff4d4d;
+    box-shadow:0 0 6px #ff4d4d;
+    animation: blinkAlarm 1s steps(1) infinite;
+  }
+  .status-bar .dot.nsr{
+    background:#2ecc40;
+    box-shadow:0 0 6px #2ecc40;
+    animation:none;
+  }
+  .performance-bar{
+    text-align:center;
+    font-size:11px;
+    font-weight:700;
+    letter-spacing:0.4px;
+    color:#8fd18f;
+    margin-top:6px;
+  }
+  select, button.ctl{
+    background:#3a3d3f;
+    color:#eee;
+    border:1px solid #555;
+    border-radius:6px;
+    padding:6px 10px;
+    font-size:12px;
+    cursor:pointer;
+  }
+  .training-banner{
+    text-align:center;
+    color:#777;
+    font-size:10px;
+    margin-top:10px;
+    letter-spacing:0.5px;
+  }
+  .modal-overlay{
+    position:fixed;
+    inset:0;
+    padding: max(12px, env(safe-area-inset-top, 0px)) max(12px, env(safe-area-inset-right, 0px))
+             max(12px, env(safe-area-inset-bottom, 0px)) max(12px, env(safe-area-inset-left, 0px));
+    background:rgba(0,0,0,0.65);
+    display:none;
+    align-items:center;
+    justify-content:center;
+    z-index:1000;
+  }
+  .modal-overlay.open{ display:flex; }
+  .modal-box{
+    background:#1f2123;
+    border:1px solid #444;
+    border-radius:12px;
+    padding:24px 28px;
+    width:320px;
+    max-width:100%;
+    max-height:100%;
+    overflow-y:auto;
+    -webkit-overflow-scrolling:touch;
+    box-shadow:0 20px 50px rgba(0,0,0,0.6);
+    text-align:center;
+  }
+  .modal-box h3{
+    color:#eee;
+    margin:0 0 6px;
+    font-size:16px;
+    letter-spacing:0.5px;
+  }
+  .modal-box p{
+    color:#999;
+    font-size:12px;
+    margin:0 0 18px;
+  }
+  .modal-btn{
+    display:block;
+    width:100%;
+    border:none;
+    border-radius:8px;
+    min-height:48px;
+    padding:12px;
+    margin-bottom:10px;
+    font-size:15px;
+    font-weight:700;
+    letter-spacing:0.4px;
+    cursor:pointer;
+  }
+
+  .modal-btn.nsr-opt{ background: linear-gradient(180deg,#3ecb5e,#1f8f3d); color:#04210c; }
+  .modal-btn.vfib-opt{ background: linear-gradient(180deg,#ff5c5c,#b81f1f); color:#3a0a0a; }
+  .modal-cancel{
+    background:none;
+    border:none;
+    color:#888;
+    font-size:14px;
+    min-height:44px;
+    padding:0 20px;
+    margin-top:2px;
+    cursor:pointer;
+    text-decoration:underline;
+  }
+  .code-summary-box{
+    width: 640px;
+    max-width: 100%;
+    max-height: 100%;
+    -webkit-overflow-scrolling: touch;
+    background-color: #fdeff0;
+    background-image:
+      linear-gradient(rgba(200,30,40,0.5) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(200,30,40,0.5) 1px, transparent 1px),
+      linear-gradient(rgba(200,30,40,0.18) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(200,30,40,0.18) 1px, transparent 1px);
+    background-size: 25px 25px, 25px 25px, 5px 5px, 5px 5px;
+    border-radius: 6px;
+    box-shadow: 0 20px 50px rgba(0,0,0,0.6);
+    padding: 16px 18px;
+    overflow-y: auto;
+    color: #2a2020;
+    font-family: 'Courier New', Courier, monospace;
+  }
+  .code-summary-header{
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    margin-bottom:12px;
+    padding-bottom:8px;
+    border-bottom: 1.5px solid rgba(120,20,20,0.5);
+  }
+  .code-summary-title{
+    font-weight:800;
+    font-size:16px;
+    letter-spacing:1.5px;
+    color:#5a1414;
+  }
+  .code-summary-close{
+    cursor:pointer;
+    font-size:26px;
+    line-height:1;
+    background:none;
+    border:none;
+    color:#5a1414;
+    width:44px;
+    height:44px;
+    margin:-10px -12px -10px 0;
+    padding:0;
+  }
+  .code-summary-stats{
+    display:flex;
+    flex-wrap:wrap;
+    gap:6px 22px;
+    margin-bottom:12px;
+    padding:8px 10px;
+    background: rgba(120,20,20,0.08);
+    border: 1px solid rgba(120,20,20,0.35);
+    border-radius:4px;
+    font-size:12px;
+    font-weight:700;
+    color:#5a1414;
+  }
+  .code-summary-stats .stat-label{
+    font-weight:400;
+    opacity:0.75;
+    margin-right:4px;
+  }
+  .code-summary-columns{
+    display:flex;
+    gap:18px;
+    align-items:flex-start;
+  }
+  .code-summary-col{
+    flex:1;
+    min-width:0;
+  }
+  .code-summary-col h4{
+    margin:0 0 6px;
+    font-size:11px;
+    letter-spacing:1px;
+    color:#5a1414;
+    border-bottom: 1px solid rgba(120,20,20,0.35);
+    padding-bottom:4px;
+  }
+  .code-summary-list{
+    list-style:none;
+    margin:0;
+    padding:0;
+    font-size:12px;
+  }
+  .code-summary-list li{
+    display:flex;
+    gap:8px;
+    padding:3px 0;
+    border-bottom: 1px dashed rgba(120,20,20,0.25);
+  }
+  .code-summary-list li .t{
+    font-weight:700;
+    min-width:42px;
+    color:#5a1414;
+  }
+  .code-summary-list li:empty, .code-summary-list:empty::after{
+    content: '';
+  }
+  .vitals-table{
+    width:100%;
+    border-collapse:collapse;
+    font-size:11px;
+  }
+  .vitals-table th{
+    text-align:left;
+    padding:3px 4px;
+    color:#5a1414;
+    border-bottom: 1px solid rgba(120,20,20,0.35);
+  }
+  .vitals-table td{
+    padding:3px 4px;
+    border-bottom: 1px dashed rgba(120,20,20,0.25);
+  }
+  /* ---- EVENT menu, drawn on the monitor screen like the device ----
+     Lives inside .screen-wrap. The transparent layer covers the screen so a
+     tap anywhere outside the panel closes it; the panel sits low-centre. */
+  .screen-menu{
+    display:none;
+    position:absolute;
+    inset:0;
+    z-index:30; /* over traces and the timer/status boxes; under alerts (50) and the off-screen (40) */
+  }
+  .screen-menu.open{ display:block; }
+
+
+  /* ---- Charging window (on the monitor screen while CHARGE runs) ---- */
+  .charge-window{
+    display:none;
+    position:absolute;
+    left:calc(50% - 180px);
+    top:calc(50% - 88px);
+    width:360px;
+    height:176px;
+    z-index:32; /* above the Events menu if both are up */
+    background:#b3c1dc;
+    border:1px solid #2b3244;
+    box-shadow:0 4px 14px rgba(0,0,0,0.6);
+    font-family: Arial, 'Helvetica Neue', sans-serif;
+    color:#111;
+    flex-direction:column;
+  }
+  .charge-window.show{ display:flex; }
+  .charge-window-title{
+    position:relative;
+    background:#1b202b;
+    color:#f2df3a;
+    font-weight:700;
+    font-size:14px;
+    text-align:center;
+    padding:4px 0 5px;
+  }
+  .charge-window-shocks{
+    position:absolute;
+    right:8px; top:3px;
+    display:flex; align-items:center; gap:1px;
+    color:#f2df3a;
+    font-size:13px;
+  }
+  .charge-window-shocks svg{ width:11px; height:15px; display:block; }
+  .charge-window-body{
+    flex:1;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    padding-top:22px;
+  }
+  .charge-window-target{ font-size:14px; font-weight:700; margin-bottom:6px; }
+  .charge-window-row{
+    display:flex;
+    align-items:center;
+    gap:12px;
+    margin-left:52px; /* bar centred, readout hangs off its right */
+  }
+  .charge-bar{
+    width:200px;
+    height:20px;
+    background:#0b0b0b;
+    border:2px solid #f4f4f4;
+    box-shadow:0 0 0 1px #555;
+  }
+  .charge-bar-fill{
+    height:100%;
+    width:0%;
+    background:linear-gradient(180deg,#ffb3b8,#f07c86 55%,#e0606b);
+  }
+  .charge-window-now{
+    width:40px;
+    font-size:13px;
+    font-weight:700;
+    font-variant-numeric: tabular-nums;
+  }
+  .charge-window-hint{
+    margin-top:auto;
+    padding-bottom:8px;
+    font-size:13px;
+    font-weight:700;
+  }
+  /* Two views: charging (bar filling) and ready (energy available, push SHOCK). */
+  .charge-window .ready-view,
+  .charge-window .delivered-view{ display:none; }
+  .charge-window.ready,
+  .charge-window.delivered{ background:#8395ad; } /* muted grey-blue */
+  .charge-window.ready .charging-view,
+  .charge-window.delivered .charging-view{ display:none; }
+  .charge-window.ready .ready-view{ display:flex; }
+  .charge-window.delivered .delivered-view{ display:flex; }
+  .delivered-view{
+    align-items:center;
+    justify-content:center;
+    color:#0d1830;
+    font-size:15px;
+    font-weight:700;
+  }
+  .ready-view{ padding-top:6px; color:#0d1830; }
+  .ready-text{
+    text-align:center;
+    font-size:14px;
+    font-weight:700;
+    line-height:1.35;
+  }
+  .ready-panel{
+    width:calc(100% - 20px);
+    height:70px;
+    margin-top:6px;
+    background:#eef1f6;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    padding-top:6px;
+    gap:4px;
+  }
+  .ready-arrow{
+    width:0; height:0;
+    border-left:9px solid transparent;
+    border-right:9px solid transparent;
+    border-top:9px solid #111418;
+    animation: readyArrowBlink 1s steps(1) infinite; /* flashes, pointing at the shock icon */
+  }
+  @keyframes readyArrowBlink{
+    0%, 50%{ opacity:1; }
+    51%, 100%{ opacity:0; }
+  }
+  .ready-shock-icon{
+    width:40px; height:40px;
+    border-radius:50%;
+    background: radial-gradient(circle at 38% 32%, #f7a37f, #e8633f 70%);
+    border:2px solid #f6d3c6;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .ready-shock-icon svg{ width:18px; height:23px; display:block; }
+  .charge-window .ready-view .charge-window-hint{ padding-bottom:6px; }
+  .screen-menu-panel{
+    position:absolute;
+    left:calc(50% - 175px);
+    bottom:26px;
+    width:350px;
+    min-height:170px;
+    background:#5d6a8c;
+    border:1px solid #2b3244;
+    box-shadow:0 4px 14px rgba(0,0,0,0.6);
+    font-family: Arial, 'Helvetica Neue', sans-serif;
+  }
+  .screen-menu-title{
+    background:#1b202b;
+    color:#f2df3a;
+    font-weight:700;
+    font-size:14px;
+    text-align:center;
+    padding:4px 0 5px;
+  }
+  .screen-menu-grid{
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:0 8px;
+    padding:6px 8px 10px;
+  }
+  .screen-menu-col{ display:flex; flex-direction:column; }
+  .screen-menu .event-menu-item{
+    display:flex;
+    align-items:center;
+    min-height:30px;
+    padding:0 8px;
+    margin:0;
+    background:none;
+    border:none;
+    border-bottom:1px solid #c9d1e4;
+    border-radius:0;
+    box-shadow:none;
+    color:#eef1f8;
+    font-family:inherit;
+    font-size:14px;
+    font-weight:600;
+    text-align:left;
+    cursor:default;
+    pointer-events:none; /* chosen with the speed dial, not by touch */
+    filter:none;
+    transform:none;
+  }
+  .screen-menu .screen-menu-col .event-menu-item:first-child{ border-top:1px solid #c9d1e4; }
+  .screen-menu .screen-menu-col:first-child .event-menu-item{
+    border-left:1px solid #c9d1e4; border-right:1px solid #c9d1e4;
+  }
+  .screen-menu .screen-menu-col:last-child .event-menu-item{
+    border-left:1px solid #c9d1e4; border-right:1px solid #c9d1e4;
+  }
+  /* Highlighted item: white bar with blue text, as on the device. Generic is
+     highlighted when the menu opens; the speed dial moves the highlight. */
+  .screen-menu .event-menu-item.hl{
+    background:#f4f6fb;
+    color:#6c7fae;
+    filter:none;
+    transform:none;
+  }
+  .pulse-alert{
+    position:absolute;
+    inset:0;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    background: rgba(0,0,0,0.78);
+    font-size:38px;
+    font-weight:900;
+    letter-spacing:2px;
+    opacity:0;
+    pointer-events:none;
+    transition: opacity 0.3s ease;
+    z-index:50;
+    text-shadow: 0 0 12px rgba(0,0,0,0.8);
+  }
+  .pulse-alert.show{ opacity:1; }
+  .pulse-alert.no-pulse{ color:#ff4d4d; }
+  .pulse-alert.pulse-present{ color:#35e335; }
+  .pulse-alert.in-progress{ color:#e8b020; font-size:26px; }
+  .fast-forward-bar{
+    margin-top: 12px;
+    background: linear-gradient(180deg,#5c5f61,#45484a);
+    color:#e5e5e5;
+    font-size:12px;
+    font-weight:700;
+    letter-spacing:0.8px;
+    text-align:center;
+    border-radius:8px;
+    min-height:46px;
+    padding:6px 8px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    box-shadow: 0 2px 0 rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.15);
+    cursor:pointer;
+    user-select:none;
+  }
+  .home-menu-box{ width:380px; }
+  .home-menu-box h3{ margin-bottom:16px; }
+  .home-menu-actions{
+    display:flex;
+    flex-direction:column;
+    gap:12px;
+    margin-bottom:6px;
+  }
+  .home-menu-actions .fast-forward-bar{ margin-top:0; font-size:14px; min-height:52px; }
+  /* Bluetooth box is tappable (the rest of the floating header isn't).
+     While the monitor is off, the black screen-off overlay sits on top of
+     it, so pairing is only possible with the monitor on, as before. */
+  .bt-box{
+    pointer-events:auto;
+    cursor:pointer;
+  }
+  .bt-box:active{ filter:brightness(1.4); }
+
+  /* ---- Touch feedback ----
+     Hover styles only where a real mouse exists; on a touchscreen :hover
+     sticks after a tap and leaves buttons looking "lit". Every tappable
+     control gets a visible pressed state instead. */
+  @media (hover:hover) and (pointer:fine){
+    .determinant-row:hover,
+    .determinant-popover-grid button:hover,
+    .modal-btn:hover,
+    .fast-forward-bar:hover,
+    .home-btn:hover{ filter:brightness(1.15); }
+  }
+  .row-btn:active, .side-btn:active, .mini-btn:active,
+  .determinant-row:active, .fast-forward-bar:active, .home-btn:active,
+  .event-menu-item:active, .modal-btn:active,
+  .determinant-popover-grid button:active{
+    filter:brightness(0.82);
+    transform:translateY(1px);
+  }
+  .arrow-btn:active{ background: rgba(255,255,255,0.18); }
+
+  #energySelectRow:active, #shockBtn:not(.ready):active{ filter:none; transform:none; }
+  .modal-btn:focus-visible, .event-menu-item:focus-visible,
+  .determinant-popover-grid button:focus-visible,
+  .code-summary-close:focus-visible{
+    outline:2px solid #4db8ff;
+    outline-offset:2px;
+  }
+
+  /* ---- Phone-width modals ---- */
+  @media (max-width: 600px){
+    .code-summary-columns{ flex-direction:column; gap:14px; }
+    .code-summary-col{ width:100%; }
+  }
+  @media (max-height: 500px){
+    .modal-box{ padding:16px 20px; }
+    .modal-box p{ margin-bottom:12px; }
+  }
+
+  /* ---- Portrait-phone prompt ---- */
+  .rotate-hint{
+    position:fixed;
+    inset:0;
+    z-index:1200;
+    display:none;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    gap:14px;
+    padding:32px;
+    background:#1b1c1e;
+    color:#e5e5e5;
+    text-align:center;
+  }
+  .rotate-hint.show{ display:flex; }
+  .rotate-hint-icon{
+    width:44px;
+    height:72px;
+    border:3px solid #9aa0a3;
+    border-radius:9px;
+    animation: rotateHint 2.4s ease-in-out infinite;
+  }
+  @keyframes rotateHint{
+    0%, 25%{ transform:rotate(0deg); }
+    55%, 100%{ transform:rotate(-90deg); }
+  }
+  @media (prefers-reduced-motion: reduce){
+    .rotate-hint-icon{ animation:none; transform:rotate(-90deg); }
+  }
+  .rotate-hint h2{ margin:6px 0 0; font-size:20px; }
+  .rotate-hint p{ margin:0; color:#9aa0a3; font-size:15px; line-height:1.45; max-width:280px; }
+  .rotate-hint button{
+    margin-top:8px;
+    min-height:44px;
+    padding:0 20px;
+    background:none;
+    border:1px solid #555;
+    border-radius:8px;
+    color:#ccc;
+    font-size:15px;
+    cursor:pointer;
+  }
+</style>
+</head>
+<body>
+
+<div class="device-scale-wrap" id="deviceScaleWrap">
+<div class="device" id="deviceRoot">
+  <div class="top-row">
+
+    <!-- LEFT CLUSTER -->
+    <div class="left-cluster">
+
+      <div class="determinant-panel">
+        <div class="determinant-row" id="padsIndicatorRow" title="Click to toggle pads">
+          <span class="determinant-circle" id="padsIndicatorCircle"></span>
+          <span class="determinant-label" id="padsIndicatorLabel">Pads</span>
+        </div>
+
+        <div class="determinant-row" id="bvmIndicatorRow" title="Click to set BVM ventilation rate">
+          <span class="determinant-circle" id="bvmIndicatorCircle"></span>
+          <span class="determinant-label" id="bvmIndicatorLabel">BVM Vent</span>
+          <div class="determinant-popover" id="bvmRatePopover">
+            <div class="determinant-popover-title">BVM rate (breaths/min, continuous)</div>
+            <div class="determinant-popover-grid">
+              <button data-bvm-rate="8">8</button>
+              <button data-bvm-rate="10">10</button>
+              <button data-bvm-rate="12">12</button>
+              <button data-bvm-rate="14">14</button>
+              <button data-bvm-rate="16">16</button>
+              <button data-bvm-rate="18">18</button>
+              <button data-bvm-rate="20">20</button>
+              <button data-bvm-rate="off" class="off-btn">OFF</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="determinant-row" id="airwayIndicatorRow" title="Click to set airway">
+          <span class="determinant-circle" id="airwayIndicatorCircle"></span>
+          <span class="determinant-label" id="airwayIndicatorLabel">Airway</span>
+          <div class="determinant-popover" id="airwayPopover">
+            <div class="determinant-popover-title">Airway type</div>
+            <div class="determinant-popover-grid">
+              <button data-airway="NPA">NPA</button>
+              <button data-airway="OPA">OPA</button>
+              <button data-airway="i-Gel">i-Gel</button>
+              <button data-airway="ET Tube">ET Tube</button>
+              <button data-airway="off" class="off-btn">OFF</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="determinant-row" id="pulseCheckRow" title="Click to check for a pulse">
+          <span class="determinant-circle" id="pulseCheckCircle"></span>
+          <span class="determinant-label">Pulse Check</span>
+        </div>
+
+        <div class="determinant-row" id="cessationRow" title="Click to declare cessation of resuscitation">
+          <span class="determinant-circle" id="cessationCircle"></span>
+          <span class="determinant-label">Cessation</span>
+        </div>
+      </div>
+
+      <div class="side-btn-group">
+        <div class="row-btn side-btn">12-LEAD</div>
+        <div class="row-btn side-btn">TRANSMIT</div>
+        <div class="row-btn side-btn two-line" id="codeSummaryBtn" style="cursor:pointer;" title="View code summary">CODE<br>SUMMARY</div>
+        <div class="row-btn side-btn">PRINT</div>
+      </div>
+    </div>
+
+    <!-- SCREEN -->
+    <div class="screen-wrap">
+      <div class="screen-off-overlay" id="screenOffOverlay"></div>
+      <div class="screen-header">
+        <span id="clock" class="clock">--:--:--</span>
+        <div class="header-icons">
+          <div class="status-box bt-box" id="linkBtn" role="button" title="Connect the CPR dome-switch sensor over Bluetooth">
+            <span class="bt-lamp" id="btLamp"></span>
+            <svg class="bt-icon" viewBox="0 0 10 17" aria-hidden="true">
+              <path d="M1 4.5 L8.5 11.5 L4.8 15.2 V1.8 L8.5 5.5 L1 12.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+            </svg>
+          </div>
+          <div class="status-box" title="Battery">
+            <svg class="battery-icon" id="batteryIcon" viewBox="0 0 13 22" aria-hidden="true">
+              <rect x="4" y="0.5" width="5" height="2" rx="0.5" fill="#e6edf5"/>
+              <rect class="shell" x="0.75" y="2.5" width="11.5" height="18.75" rx="1.5" fill="none" stroke="#e6edf5" stroke-width="1.5"/>
+              <!-- bars top to bottom = bar 4..1; top bar disappears first -->
+              <rect class="bar" data-bar="4" x="2.75" y="4.5"  width="7.5" height="3.2"/>
+              <rect class="bar" data-bar="3" x="2.75" y="8.5"  width="7.5" height="3.2"/>
+              <rect class="bar" data-bar="2" x="2.75" y="12.5" width="7.5" height="3.2"/>
+              <rect class="bar" data-bar="1" x="2.75" y="16.5" width="7.5" height="3.2"/>
+            </svg>
+          </div>
+          <div class="status-box energy-box" title="Selected energy">
+            <svg class="energy-bolt" viewBox="0 0 14 11" aria-hidden="true">
+              <path d="M9.5 0.5 L3.5 6 L7 6 L4.5 10.5 L10.5 4.8 L7 4.8 Z" fill="currentColor"/>
+            </svg>
+            <span id="joulesPill">120J</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="screen-body">
+        <!-- VITALS COLUMN -->
+        <div class="vitals-col">
+          <div class="vital-box hr-row">
+            <div class="vital-label"><span class="name">HR</span><span>&#9829;</span></div>
+            <div class="hr-dashes" id="hrValue">---</div>
+          </div>
+
+          <div class="vital-box spo2-row" id="spo2Box" style="cursor:pointer;" title="Click to start SpO2 monitoring">
+            <div class="vital-label"><span class="name">SpO2</span><span>%</span></div>
+            <div class="vital-value" id="spo2Value">--</div>
+          </div>
+
+          <div class="vital-box co2-row" id="co2Box" style="cursor:pointer;" title="Click to start CO2 monitoring">
+            <div class="vital-label"><span class="name">CO2</span><span>mmHg</span></div>
+            <div class="co2-values">
+              <span class="co2-num" id="co2Value">--</span>
+            </div>
+            <div class="co2-rr" id="co2Rr">RR --</div>
+          </div>
+
+          <div class="vital-box nibp-row">
+            <div class="vital-label"><span class="name">NIBP</span><span>mmHg</span></div>
+            <div class="nibp-dashes" id="nibpReadout">-- / --</div>
+            <div class="nibp-map" id="nibpMap">MAP --</div>
+          </div>
+        </div>
+
+        <!-- TRACES COLUMN -->
+        <div class="traces-col">
+          <div class="event-banner" id="eventBanner"><span id="eventBannerName"></span><span id="eventBannerTime"></span></div>
+          <div class="trace-block" style="flex:1;">
+            <canvas id="ecgCanvas"></canvas>
+          </div>
+          <div class="trace-block" style="flex:1;">
+            <canvas id="spo2Canvas"></canvas>
+          </div>
+          <div class="trace-block" style="flex:2;">
+            <canvas id="co2Canvas"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <div class="screen-menu" id="eventMenuModal">
+        <div class="screen-menu-panel">
+          <div class="screen-menu-title">Events</div>
+          <div class="screen-menu-grid">
+            <div class="screen-menu-col">
+              <button class="event-menu-item hl" data-event="Generic">Generic</button>
+              <button class="event-menu-item" data-event="Epinephrine">Epinephrine</button>
+              <button class="event-menu-item" data-event="Lidocaine">Lidocaine</button>
+            </div>
+            <div class="screen-menu-col">
+              <button class="event-menu-item" data-event="Amiodarone 300 mg" data-amio-dose="300">Amiodarone 300 mg</button>
+              <button class="event-menu-item" data-event="Amiodarone 150 mg" data-amio-dose="150">Amiodarone 150 mg</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="charge-window" id="chargeWindow" aria-live="polite">
+        <div class="charge-window-title">
+          <span id="chargeWindowMode">Manual Mode</span>
+          <span class="charge-window-shocks" title="Shocks delivered">
+            <svg viewBox="4 2 16 20" aria-hidden="true"><path d="M9.6 3.6 H15.4 L12.9 10 H16.6 L11.2 16 H13.1 L8 21.2 L8.9 16 H7.1 L9.9 10.6 H7.6 Z" fill="currentColor"/></svg>
+            <span id="chargeWindowShocks">0</span>
+          </span>
+        </div>
+        <div class="charge-window-body charging-view">
+          <div class="charge-window-target">Charging to <span id="chargeWindowTarget">120</span>J</div>
+          <div class="charge-window-row">
+            <div class="charge-bar"><div class="charge-bar-fill" id="chargeBarFill"></div></div>
+            <span class="charge-window-now" id="chargeWindowNow">0J</span>
+          </div>
+          <div class="charge-window-hint">To cancel, push Speed Dial</div>
+        </div>
+        <div class="charge-window-body ready-view">
+          <div class="ready-text"><span id="chargeWindowAvail">120</span>J Available<br>Push SHOCK button!</div>
+          <div class="ready-panel">
+            <div class="ready-arrow"></div>
+            <div class="ready-shock-icon">
+              <svg viewBox="4 2 16 20" aria-hidden="true"><path d="M9.6 3.6 H15.4 L12.9 10 H16.6 L11.2 16 H13.1 L8 21.2 L8.9 16 H7.1 L9.9 10.6 H7.6 Z" fill="#fff"/></svg>
+            </div>
+          </div>
+          <div class="charge-window-hint">To cancel, push Speed Dial</div>
+        </div>
+        <div class="charge-window-body delivered-view">Energy delivered</div>
+      </div>
+
+      <div class="pulse-alert" id="pulseAlert"></div>
+    </div>
+
+    <!-- RIGHT CLUSTER -->
+    <div class="right-cluster" style="width:227px;"><!-- 91.5 + 4 + 16 + 4 + 91.5 + 20 padding -->
+      <div class="btn-grid">
+        <div class="btn-group-bg defib"></div>
+        <div class="btn-group-bg pacing"></div>
+        <!-- Row 1: ON has no left-column counterpart -->
+        <div class="grid-cell"></div>
+        <div class="grid-cell num-cell"><span class="num">1</span></div>
+        <div class="grid-cell">
+          <div class="row-btn on-btn" id="onResetBtn" style="cursor:pointer;" title="Power on — starts whichever scenario is selected"><span class="status-light"></span>ON</div>
+        </div>
+
+        <!-- Row 2: CPR lines up with ENERGY SELECT -->
+        <div class="grid-cell"><div class="row-btn" id="cprBtn"><span class="status-light" id="cprLight"></span>CPR</div></div>
+        <div class="grid-cell num-cell"><span class="num">2</span></div>
+        <div class="grid-cell">
+          <div class="row-btn" id="energySelectRow" style="justify-content:space-between;">
+            <span id="energyDownBtn" class="arrow-btn" title="Decrease energy">&#9660;</span>
+            <span class="energy-select-label">Energy<br>Select</span>
+            <span id="energyReadout" hidden>120 J</span><!-- joules now shown in the top-right energy box; kept for the existing update code -->
+            <span id="energyUpBtn" class="arrow-btn" title="Increase energy">&#9650;</span>
+          </div>
+        </div>
+
+        <!-- Row 3: ANALYZE lines up with CHARGE -->
+        <div class="grid-cell"><div class="row-btn" id="analyzeBtn" style="cursor:pointer;" title="Analyze rhythm (AED mode only)"><span class="status-light" id="analyzeLight"></span>ANALYZE</div></div>
+        <div class="grid-cell num-cell"><span class="num">3</span></div>
+        <div class="grid-cell"><div class="row-btn charge-btn" id="chargeBtn">CHARGE</div></div>
+
+        <!-- Row 4-5: LEAD/SIZE and SYNC both line up with the SHOCK button, which spans both rows -->
+        <div class="grid-cell">
+          <div class="lead-size-row">
+            <span class="mini-btn">LEAD</span>
+            <span class="mini-btn">SIZE</span>
+          </div>
+        </div>
+        <div class="grid-cell num-cell"></div>
+        <div class="grid-cell shock-cell"><div class="shock-btn" id="shockBtn"><svg class="shock-bolt" viewBox="4 2 16 20" aria-hidden="true"><path d="M9.6 3.6 H15.4 L12.9 10 H16.6 L11.2 16 H13.1 L8 21.2 L8.9 16 H7.1 L9.9 10.6 H7.6 Z" fill="#fff"/></svg></div></div>
+
+        <div class="grid-cell"><div class="row-btn"><span class="status-light" id="syncLight"></span>SYNC</div></div>
+        <div class="grid-cell num-cell"></div>
+        <!-- (no right-column cell here — SHOCK button above spans into this row) -->
+
+        <!-- Row 6: NIBP lines up with PACER -->
+        <div class="grid-cell"><div class="row-btn" id="nibpBtn" style="cursor:pointer;" title="Take NIBP"><span class="status-light" id="nibpLight"></span>NIBP</div></div>
+        <div class="grid-cell num-cell"></div>
+        <div class="grid-cell"><div class="row-btn"><span class="status-light" id="pacerLight"></span>PACER</div></div>
+
+        <!-- Row 7: ALARMS lines up with RATE -->
+        <div class="grid-cell"><div class="row-btn" style="background:linear-gradient(180deg,#e8b020,#c98a10);color:#3a2500;"><span class="status-light" id="alarmsLight"></span>ALARMS</div></div>
+        <div class="grid-cell num-cell"></div>
+        <div class="grid-cell"><div class="row-btn">&#9650; RATE</div></div>
+
+        <!-- Row 8: OPTIONS lines up with CURRENT -->
+        <div class="grid-cell"><div class="row-btn">OPTIONS</div></div>
+        <div class="grid-cell num-cell"></div>
+        <div class="grid-cell"><div class="row-btn">&#9650; CURRENT</div></div>
+
+        <!-- Row 9: EVENT lines up with PAUSE -->
+        <div class="grid-cell"><div class="row-btn" id="eventBtn" style="cursor:pointer;" title="Mark an event">EVENT</div></div>
+        <div class="grid-cell num-cell"></div>
+        <div class="grid-cell"><div class="row-btn">PAUSE</div></div>
+      </div>
+
+      <div class="dial-row">
+        <div class="home-cell">
+          <div class="home-btn" id="homeBtn" title="Toggle hint bar">&#8962;</div>
+        </div>
+        <div class="speed-dial-wrap">
+          <div class="dial-assembly" id="dialAssembly">
+            <!-- curved label over the top-left of the dial, as on the device -->
+            <svg class="dial-label-arc" viewBox="0 0 130 130" aria-hidden="true">
+              <defs><path id="dialLabelPath" d="M 13.7 83.7 A 53 53 0 0 1 91.5 19.1"/></defs>
+              <text><textPath href="#dialLabelPath" startOffset="50%" text-anchor="middle">SPEED DIAL</textPath></text>
+            </svg>
+            <div class="dial-bezel">
+              <div class="dial" id="dialRing" title="Turn to move the selection box">
+                <div class="dial-center" id="speedDial" title="Press to select (dumps the charge if charged)"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Former drop-down hint bar. No longer shown (the home button opens a
+       menu instead), but kept in the page because the simulation still
+       writes its status text, event log and performance line here. -->
+  <div class="hint-bar" id="hintBar" style="display:none;" aria-hidden="true">
+    <div class="status-bar">
+      <span class="dot" id="statusDot"></span> <span id="statusBarText">SCENARIO — INITIAL SHOCKABLE CARDIAC ARREST — TRAINING USE ONLY</span>
+    </div>
+
+    <div class="performance-bar" id="performanceStatsBar" style="display:none;">
+      <span id="performanceStatsEl"></span>
+    </div>
+
+    <div class="event-log" id="eventLog">Select energy, then CHARGE, then deliver the shock.</div>
+  </div>
+
+  <div class="training-banner">
+    EMS TRAINING SIMULATION · NOT A MEDICAL DEVICE · NOT FOR CLINICAL USE
+  </div>
+</div>
+</div>
+
+<div class="flash-overlay" id="flashOverlay"></div>
+
+<div class="picker-backdrop" id="pickerBackdrop"></div>
+
+<div class="rotate-hint" id="rotateHint" role="dialog" aria-labelledby="rotateHintTitle">
+  <div class="rotate-hint-icon"></div>
+  <h2 id="rotateHintTitle">Turn your phone sideways</h2>
+  <p>The monitor is laid out for a landscape screen. In portrait every control is too small to tap reliably.</p>
+  <button id="rotateHintDismiss">Continue in portrait</button>
+</div>
+
+<div class="modal-overlay" id="homeMenuModal">
+  <div class="modal-box home-menu-box">
+    <h3>Home</h3>
+    <div class="home-menu-actions">
+      <div class="fast-forward-bar" id="scenarioBtn" title="Select which scenario runs when powered on">SCENARIO: HEALTHY ADULT</div>
+      <div class="fast-forward-bar" id="fullscreenBtn" title="Hide the browser's address bar and toolbars">FULL SCREEN</div>
+    </div>
+    <button class="modal-cancel" id="homeMenuCloseBtn">Close</button>
+  </div>
+</div>
+
+<div class="modal-overlay" id="resetModal">
+  <div class="modal-box">
+    <h3>Reset Simulation</h3>
+    <p>Select a starting rhythm</p>
+    <button class="modal-btn nsr-opt" id="resetNsrBtn">Healthy Adult</button>
+    <button class="modal-btn vfib-opt" id="resetVfibBtn">Cardiac Arrest (Manual Mode)</button>
+    <button class="modal-btn vfib-opt" id="resetAedBtn">Cardiac Arrest (Harvard Mode)</button>
+    <button class="modal-cancel" id="resetCancelBtn">Cancel</button>
+  </div>
+</div>
+
+<div class="modal-overlay" id="codeSummaryModal">
+  <div class="code-summary-box">
+    <div class="code-summary-header">
+      <div class="code-summary-title">CODE SUMMARY</div>
+      <button class="code-summary-close" id="codeSummaryCloseBtn" title="Close">&times;</button>
+    </div>
+    <div class="code-summary-stats" id="codeSummaryStats"></div>
+    <div class="code-summary-columns">
+      <div class="code-summary-col">
+        <h4>EVENTS</h4>
+        <ul class="code-summary-list" id="codeSummaryEventsList"></ul>
+      </div>
+      <div class="code-summary-col">
+        <h4>VITALS TAKEN</h4>
+        <table class="vitals-table">
+          <thead><tr><th>Time</th><th>HR</th><th>SpO2</th><th>NIBP</th><th>CO2</th></tr></thead>
+          <tbody id="codeSummaryVitalsBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ---- Fit the fixed-width device mockup to any screen ----
+// Every button/panel in this UI is laid out with fixed pixel dimensions at
+// a ~980px design width, so on a phone the safe way to make the whole
+// thing fit — without touching the hundreds of hand-tuned sizes elsewhere
+// in this file — is a uniform scale-to-fit, the same trick a zoomed-out
+// print preview uses. Pinch-zoom is intentionally left enabled (no
+// user-scalable=no in the viewport tag) so on a small phone someone can
+// still zoom into one control for precise tapping.
+// Runs before the canvas setup below so ecgDims/spo2Dims/co2Dims measure
+// the real, already-scaled container size on first paint instead of the
+// full-size one.
+const deviceRoot = document.getElementById('deviceRoot');
+const deviceScaleWrap = document.getElementById('deviceScaleWrap');
+let currentDeviceScale = 1; // read by the ECG/SpO2 trace amplitude math below
+// Touchscreens (iPad especially) get to scale the device UP past its 980px
+// design size so the controls grow into the extra room; with a mouse the
+// old 1:1 cap stays, so desktop looks exactly as before.
+const isCoarsePointer = window.matchMedia('(pointer: coarse)').matches;
+const MAX_DEVICE_SCALE = isCoarsePointer ? 1.35 : 1;
+const DEVICE_EDGE_GAP = 8; // screen px kept around the device so its drop shadow isn't clipped
+function applyDeviceScale(){
+  deviceRoot.style.transform = 'none';
+  const naturalW = deviceRoot.offsetWidth;
+  const naturalH = deviceRoot.offsetHeight;
+  // Visible area = viewport minus the notch / home-indicator safe areas
+  // (applied as body padding in CSS, read back here as resolved px).
+  const bodyStyle = getComputedStyle(document.body);
+  const availW = window.innerWidth - parseFloat(bodyStyle.paddingLeft) - parseFloat(bodyStyle.paddingRight) - DEVICE_EDGE_GAP * 2;
+  const availH = window.innerHeight - parseFloat(bodyStyle.paddingTop) - parseFloat(bodyStyle.paddingBottom) - DEVICE_EDGE_GAP * 2;
+  const scale = Math.max(0.1, Math.min(MAX_DEVICE_SCALE, availW / naturalW, availH / naturalH));
+  currentDeviceScale = scale;
+  deviceRoot.style.transformOrigin = 'top left';
+  deviceRoot.style.transform = `translate(${DEVICE_EDGE_GAP}px, ${DEVICE_EDGE_GAP}px) scale(${scale})`;
+  deviceScaleWrap.style.width = (naturalW * scale + DEVICE_EDGE_GAP * 2) + 'px';
+  deviceScaleWrap.style.height = (naturalH * scale + DEVICE_EDGE_GAP * 2) + 'px';
+  deviceScaleWrap.classList.add('scaled');
+  updateRotateHint();
+}
+
+// Portrait phone: the whole monitor would shrink to roughly 40% — suggest
+// rotating instead. Dismissible, and it stays dismissed for the session.
+const rotateHintEl = document.getElementById('rotateHint');
+let rotateHintDismissed = false;
+function updateRotateHint(){
+  const portraitPhone = isCoarsePointer && window.innerHeight > window.innerWidth && window.innerWidth < 600;
+  rotateHintEl.classList.toggle('show', portraitPhone && !rotateHintDismissed);
+}
+document.getElementById('rotateHintDismiss').addEventListener('click', (e) => {
+  e.stopPropagation();
+  rotateHintDismissed = true;
+  updateRotateHint();
+});
+
+applyDeviceScale();
+window.addEventListener('resize', applyDeviceScale);
+window.addEventListener('orientationchange', () => setTimeout(applyDeviceScale, 50));
+// The device's own height changes at runtime (home button shows/hides the
+// hint bar, the performance line appears, the event log wraps). Re-fit
+// whenever that happens so nothing spills off the bottom of the screen.
+// Safe from feedback loops: applyDeviceScale only changes the transform,
+// which doesn't alter the layout size this observer watches.
+if(window.ResizeObserver){
+  let lastObservedH = deviceRoot.offsetHeight;
+  new ResizeObserver(() => {
+    const h = deviceRoot.offsetHeight;
+    if(h !== lastObservedH){ lastObservedH = h; applyDeviceScale(); }
+  }).observe(deviceRoot);
+}
+// iOS Safari only runs :active styles when the page has a touch listener.
+document.addEventListener('touchstart', () => {}, { passive: true });
+
+// Simulated clock: everywhere the engine needs "now" for scenario timing
+// (the stopwatch, shock/epi timing gates, the SpO2 delay/history engine),
+// it reads simNow() instead of Date.now() directly. simTimeOffsetMs is
+// currently always 0 (the fast-forward button that advanced it has been
+// removed); the hook is kept so a time-skip can be re-added without
+// touching every timing reference.
+let simTimeOffsetMs = 0;
+function simNow(){
+  return Date.now() + simTimeOffsetMs;
+}
+
+// Scenario stopwatch — counts up from 00:00 (not wall-clock time), and
+// resets to zero whenever a new scenario is started.
+let scenarioStartTime = simNow();
+const clockEl = document.getElementById('clock');
+
+function updateClock(){
+  const totalSeconds = Math.max(0, Math.floor((simNow() - scenarioStartTime) / 1000));
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = totalSeconds % 60;
+  const mm = String(m).padStart(2,'0');
+  const ss = String(s).padStart(2,'0');
+  clockEl.textContent = h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+}
+updateClock();
+setInterval(updateClock, 1000);
+
+// ---- Code Summary: chronological event log + vitals-taken snapshots ----
+let codeSummaryEvents = [];
+let vitalsSnapshots = [];
+
+function logCodeEvent(label){
+  codeSummaryEvents.push({ time: clockEl.textContent, label });
+}
+
+function logVitalsSnapshot(){
+  vitalsSnapshots.push({
+    time: clockEl.textContent,
+    hr: hrValueEl.textContent,
+    spo2: spo2ValueEl.textContent === '--' ? '--' : `${spo2ValueEl.textContent}%`,
+    nibp: nibpReadoutEl.textContent,
+    co2: co2ValueEl.textContent === '--' ? '--' : `${co2ValueEl.textContent}`
+  });
+}
+
+logCodeEvent('POWER ON');
+
+// ---- ECG Canvas: V-Fib waveform, scrolling sweep like a real monitor ----
+const ecgCanvas = document.getElementById('ecgCanvas');
+const ecgCtx = ecgCanvas.getContext('2d');
+
+function resizeCanvas(canvas){
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * devicePixelRatio;
+  canvas.height = canvas.height ; // keep declared height attr as CSS px basis
+}
+
+function setupCanvas(canvas){
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.parentElement.getBoundingClientRect();
+  const width = rect.width;
+  const height = rect.height;
+  canvas.width = Math.floor(width * dpr);
+  canvas.height = Math.floor(height * dpr);
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  return { ctx, width, height };
+}
+
+let ecgDims = setupCanvas(ecgCanvas);
+let spo2Canvas = document.getElementById('spo2Canvas');
+let spo2Dims = setupCanvas(spo2Canvas);
+let co2Canvas = document.getElementById('co2Canvas');
+let co2Dims = setupCanvas(co2Canvas);
+
+window.addEventListener('resize', () => {
+  ecgDims = setupCanvas(ecgCanvas);
+  spo2Dims = setupCanvas(spo2Canvas);
+  co2Dims = setupCanvas(co2Canvas);
+});
+
+// Window 'resize' doesn't reliably fire when entering/exiting fullscreen
+// preview (the container can be rescaled without a real viewport resize).
+// Rather than watch for that with a ResizeObserver — which caused a bad
+// feedback loop here, since its callback was mutating the very canvas
+// dimensions it (indirectly, via the parent) was observing — the already-
+// running animation loop just checks each canvas's actual rendered size a
+// few times a second and re-syncs it if it's drifted. A plain size check
+// can't trigger itself, so there's no loop risk.
+let resizeCheckCounter = 0;
+function checkCanvasSizes(){
+  resizeCheckCounter++;
+  if(resizeCheckCounter % 15 !== 0) return; // ~4x/sec at 60fps
+  const ecgRect = ecgCanvas.parentElement.getBoundingClientRect();
+  if(Math.abs(ecgRect.width - ecgDims.width) > 0.5 || Math.abs(ecgRect.height - ecgDims.height) > 0.5){
+    ecgDims = setupCanvas(ecgCanvas);
+  }
+  const spo2Rect = spo2Canvas.parentElement.getBoundingClientRect();
+  if(Math.abs(spo2Rect.width - spo2Dims.width) > 0.5 || Math.abs(spo2Rect.height - spo2Dims.height) > 0.5){
+    spo2Dims = setupCanvas(spo2Canvas);
+  }
+  const co2Rect = co2Canvas.parentElement.getBoundingClientRect();
+  if(Math.abs(co2Rect.width - co2Dims.width) > 0.5 || Math.abs(co2Rect.height - co2Dims.height) > 0.5){
+    co2Dims = setupCanvas(co2Canvas);
+  }
+}
+
+// Generate chaotic V-Fib signal: irregular, no discernible QRS, undulating baseline
+// We'll build a value generator that sums several random-phase sine waves with
+// randomly drifting frequency/amplitude, plus noise, to look like coarse V-Fib.
+
+// ---- Rhythm engine: VF, VT, Asystole, PEA, or Normal Sinus Rhythm ----
+let currentRhythm = 'vfib'; // 'vfib' | 'vtach' | 'asystole' | 'pea' | 'nsr'
+let currentScenario = 'arrest'; // 'arrest' (Cardiac Arrest — Manual or AED mode) | 'healthy' (Healthy Adult)
+let aedMode = false;        // true if the current arrest scenario is AED Mode (no manual energy select; must analyze before charging)
+let aedShockAdvised = false; // set by ANALYZE — must re-analyze before each shock in AED mode
+let aedAnalyzePending = false;
+let aedAnalyzePendingTimeoutId = null;
+let currentHR = null;       // set once converted to NSR
+let currentVTRate = null;   // set once the arrest rhythm rolls Ventricular Tachycardia
+let currentPEARate = null;  // set once the non-shockable arrest rhythm rolls PEA
+let spo2On = false;         // true once the SpO2 vital box has been clicked
+let co2On = false;          // true once the CO2 vital box has been clicked
+
+// Simulation determinants — set via the left-panel indicators, affect CO2/SpO2/ECG display
+let padsOn = false; // true once pads are placed — required for the rhythm to show at all
+let cprStarted = false;
+let bvmStarted = false;
+let bvmRate = null; // selected ventilation rate — ACLS target is CONTINUOUS ventilation at 10-12 breaths/min (one breath every 5-6 seconds), for both basic and advanced airway (no 30:2 ratio in this sim)
+let airwayPlaced = false;
+let airwayType = null;
+
+// CO2 moves toward a target value over time rather than jumping instantly.
+// SpO2 has its own dedicated physiology engine, declared further down.
+let co2Target = null;
+let co2RampTimeoutId = null;
+
+// Live probability (0-100) that the NEXT shock converts a shockable arrest
+// rhythm to ROSC. Starts at 100% at the true moment of arrest and decays
+// over time — but instead of a flat "CPR on/off" rate, the decay speed is
+// now driven by the ACLS Adherence & Compression Fraction engine below
+// (see careQualityFactor()): sustained high compression fraction and
+// protocol-correct interventions slow the decay; poor CPR fraction and
+// protocol misses accelerate it. Down time + bystander CPR before the
+// trainee even arrives already eats into this before the scenario timer
+// starts.
+let roscChance = 100;
+let roscTickIntervalId = null;
+// Degradation stages as roscChance falls: 0=initial rhythm, 1=coarse V-Fib,
+// 2=fine V-Fib, 3=finer V-Fib, 4=asystole. Only ever moves forward.
+let vfDegradationStage = 0;
+let vfibAmplitudeMultiplier = 1.0; // scales vfibValue's output — lower = finer VF
+
+// Cessation of Resuscitation is now a manually-triggered determinant, not an
+// automatic end-state — this just tracks whether it's been declared.
+let cessationAnnounced = false;
+
+// Epi given while asystole or PEA now acts as a "shock" in the
+// non-shockable pathway — each dose rolls against the SAME live roscChance
+// (kept ticking through this zone too, see roscTickOnce) rather than a
+// fixed per-dose table. Counters are tracked SEPARATELY per rhythm and
+// keep counting up for the whole scenario — leaving that rhythm and later
+// returning to it does NOT reset them; only a full scenario reset zeroes
+// these.
+let asystoleEpiDoseCount = 0;
+let peaEpiDoseCount = 0;
+
+// Real termination-of-resuscitation logic: 3 epi doses given while truly in
+// asystole with no conversion means ROSC is no longer reachable — but the
+// SIM never auto-declares this, it's on the trainee to recognize it and
+// call Cessation of Resuscitation themselves.
+let roscUnsalvageable = false;
+
+// A shock delivered within 1:45 of the previous one is ineffective —
+// no roll against roscChance at all.
+let lastShockDeliveredTime = null;
+let shocksDelivered = 0;
+const SHOCK_MIN_INTERVAL_MS = 105000; // 1 minute 45 seconds
+
+let epiCount = 0;
+let lastEpiTime = null;
+let amiodaroneCount = 0;
+
+let nsrFrame = 0;
+// ---- NSR ectopy: occasional PVCs ----
+// A post-ROSC myocardium is irritable — the rhythm shouldn't read as a
+// perfectly clean sinus strip. Rather than mixing in on every beat (which
+// would look more like bigeminy or a different rhythm entirely), a small
+// per-beat chance rolls a premature ventricular contraction: no preceding
+// P wave, a wide/bizarre QRS, a T wave discordant to it, arriving early
+// (shorter coupling interval), followed by one beat with a full
+// compensatory pause before the next normal sinus beat. Healthy Adult
+// scenario stays clean — this only fires once truly post-ROSC.
+const NSR_PVC_CHANCE_PER_BEAT = 0.15; // ~1 PVC every ~7 beats on average
+let nsrCycleStartFrame = 0;   // frame the CURRENT beat cycle began
+let nsrCyclePeriod = 20;      // this cycle's length in frames (normal, shortened for a PVC, or extended for its compensatory pause)
+let nsrIsPvcBeat = false;     // true while rendering the current cycle as a PVC
+let nsrPendingCompensatoryPause = false; // set by a PVC beat so the NEXT cycle gets the extended pause
+let vtachFrame = 0;
+let peaFrame = 0;
+
+// ================= ACLS Adherence & Compression Fraction Engine =================
+// This replaces the old flat "CPR on = half decay rate" rule. How the
+// arrest advances (roscChance's decay speed) is now driven by two tracked
+// performance metrics instead of a single binary flag:
+//
+//  1. COMPRESSION FRACTION — the % of arrest time compressions have
+//     actually been active, tracked live off the real CPR sensor's
+//     start/stop events (see startCprFromSensor/stopCprFromSensor).
+//
+//  2. ACLS ADHERENCE SCORE — a 0-100 running score, starting at 100 and
+//     adjusted at specific, identifiable decision points in the algorithm:
+//     epinephrine/amiodarone timing relative to shock count, no stacked
+//     shocks (CPR must resume between shocks), and ventilation rate
+//     (target: continuous 10-12/min — one breath every 5-6 seconds — any airway, no 30:2 ratio here).
+//     Every adjustment is logged to the Code Summary so it's reviewable
+//     as a debrief, not a hidden dice roll.
+//
+// The two are blended into a single 0-1 "care quality" factor that sets
+// how fast roscChance decays each second — high compression fraction and
+// clean protocol adherence slow the decline; poor CPR fraction and missed
+// checkpoints accelerate it. Good care still doesn't stop the clock
+// entirely (defibrillation is still what actually fixes VF/pVT), but it
+// meaningfully buys time.
+
+// ---- Compression Fraction tracking ----
+let compressionActiveMs = 0;        // cumulative ms compressions have been active, rolled up on each stop
+let cprActiveSegmentStart = null;   // simNow() when the CURRENT compression segment began; null if not compressing right now
+let cfTrackingStart = null;         // simNow() when CF tracking began for this arrest; null when not tracking (healthy scenario, pre-reset)
+let cfFrozenElapsedMs = null;       // set at ROSC/cessation to freeze the CF denominator — compressions (and the fraction) shouldn't keep draining after the code ends
+
+function compressionActiveMsNow(){
+  // live total, including whatever segment is currently in progress
+  if(cprActiveSegmentStart !== null){
+    return compressionActiveMs + (simNow() - cprActiveSegmentStart);
+  }
+  return compressionActiveMs;
+}
+
+function compressionFraction(){
+  if(cfTrackingStart === null) return 0;
+  const elapsed = cfFrozenElapsedMs !== null ? cfFrozenElapsedMs : (simNow() - cfTrackingStart);
+  if(elapsed <= 0) return 0;
+  return Math.min(100, (compressionActiveMsNow() / elapsed) * 100);
+}
+
+// Freezes CF tracking (called at ROSC and at cessation) — closes out any
+// in-progress compression segment and locks the elapsed-time denominator
+// so the fraction reported afterward reflects the code, not idle time.
+function freezeCompressionFraction(){
+  if(cprActiveSegmentStart !== null){
+    compressionActiveMs += simNow() - cprActiveSegmentStart;
+    cprActiveSegmentStart = null;
+  }
+  if(cfTrackingStart !== null && cfFrozenElapsedMs === null){
+    cfFrozenElapsedMs = simNow() - cfTrackingStart;
+  }
+}
+
+// ---- ACLS Adherence score ----
+let adherenceScore = 100;
+const ADHERENCE_MIN = 0;
+const ADHERENCE_MAX = 100;
+
+// true once compressions have happened since the last shock — reset to
+// false right after every shock, set true again by startCprFromSensor().
+// Initialized true so the very first shock of a code is never flagged.
+let cprHappenedSinceLastShock = true;
+
+function adjustAdherence(delta, reason){
+  adherenceScore = Math.max(ADHERENCE_MIN, Math.min(ADHERENCE_MAX, adherenceScore + delta));
+  const sign = delta > 0 ? '+' : '';
+  logCodeEvent(`ACLS ADHERENCE ${sign}${delta} (now ${adherenceScore}/100) — ${reason}`);
+  refreshPerformanceDisplay();
+}
+
+// Blends compression fraction and adherence into a single 0-1 factor.
+// Weighted toward compression fraction, reflecting ACLS's framing of
+// high-quality CPR as the single highest-value action in the algorithm.
+const CARE_QUALITY_CF_WEIGHT = 0.6;
+const CARE_QUALITY_ADHERENCE_WEIGHT = 0.4;
+function careQualityFactor(){
+  const cfFrac = compressionFraction() / 100;
+  const adhFrac = adherenceScore / 100;
+  return Math.max(0, Math.min(1, cfFrac * CARE_QUALITY_CF_WEIGHT + adhFrac * CARE_QUALITY_ADHERENCE_WEIGHT));
+}
+
+// roscChance's decay rate is split into two branches, matching real ACLS's
+// shockable vs non-shockable pathways. Which branch's rates apply is read
+// fresh off the CURRENT rhythm on every tick (see roscTickOnce), so the sim
+// correctly swaps rule sets the instant the rhythm crosses branches — VF
+// degrading all the way to asystole, or asystole/PEA epi-converting back
+// up to V-Fib.
+//
+// Shockable (VF/pVT): worst case (no compressions, adherence bottomed
+// out) decays at 15%/min; best case (100% CF, full adherence) at 5%/min.
+const ROSC_DECAY_SHOCKABLE_NO_CARE_PER_MIN = 15;
+const ROSC_DECAY_SHOCKABLE_OPTIMAL_CARE_PER_MIN = 5;
+// Non-shockable (asystole/PEA): the rhythm is already worse off, so the
+// swing between good and bad care is much narrower — 3%/min worst case
+// down to 1%/min best case.
+const ROSC_DECAY_NONSHOCKABLE_NO_CARE_PER_MIN = 3;
+const ROSC_DECAY_NONSHOCKABLE_OPTIMAL_CARE_PER_MIN = 1;
+// roscChance never fully bottoms out to 0 — there's always a slim (if
+// vanishing) chance, right up until the 3-dose asystole cap in
+// administerEpinephrine() closes it off for real.
+const ROSC_CHANCE_FLOOR = 5;
+
+// Runs every 2 simulated minutes of arrest time — mirrors the ACLS
+// 2-minute rhythm-check cadence — and scores the trailing compression
+// fraction against real-world CPR-quality targets (>=80% good, <60% poor).
+let nextCfCheckpointAt = null;
+function maybeRunCfCheckpoint(){
+  if(nextCfCheckpointAt === null) return;
+  if(simNow() < nextCfCheckpointAt) return;
+  const cf = compressionFraction();
+  if(cf >= 80){
+    adjustAdherence(3, `2-min checkpoint — compression fraction ${cf.toFixed(0)}% (target ≥80%)`);
+  } else if(cf >= 60){
+    logCodeEvent(`2-min checkpoint — compression fraction ${cf.toFixed(0)}% (below the ≥80% target)`);
+  } else {
+    adjustAdherence(-5, `2-min checkpoint — compression fraction ${cf.toFixed(0)}% (below the 60% minimum)`);
+  }
+  nextCfCheckpointAt += 120000;
+}
+
+// Runs continuously alongside the V-Fib/V-Tach decay tick below, for the
+// whole arrest — from scenario start to ROSC or cessation. CPR quality and
+// adherence now matter all the way through asystole/PEA too, not just
+// while the rhythm is shockable.
+let performanceTickIntervalId = null;
+function performanceTickOnce(){
+  maybeRunCfCheckpoint();
+  refreshPerformanceDisplay();
+}
+function startPerformanceTick(){
+  if(performanceTickIntervalId) return;
+  performanceTickIntervalId = setInterval(performanceTickOnce, 1000);
+}
+function stopPerformanceTick(){
+  if(performanceTickIntervalId){ clearInterval(performanceTickIntervalId); performanceTickIntervalId = null; }
+}
+
+function refreshPerformanceDisplay(){
+  if(!performanceStatsBar) return;
+  if(cfTrackingStart === null){
+    performanceStatsBar.style.display = 'none';
+    return;
+  }
+  performanceStatsBar.style.display = '';
+  performanceStatsEl.textContent = `COMPRESSION FRACTION ${compressionFraction().toFixed(0)}%  ·  ACLS ADHERENCE ${adherenceScore.toFixed(0)}/100`;
+}
+
+// Cardiac arrest rhythms — no perfusing pulse, whatever the monitor shows electrically
+function isArrestRhythm(rhythm){
+  return rhythm === 'vfib' || rhythm === 'vtach' || rhythm === 'asystole' || rhythm === 'pea';
+}
+
+// true only while compressions are actually happening right now — CPR has
+// been started AND it isn't currently paused for a rhythm check
+function isCprActive(){
+  return cprStarted;
+}
+
+function vtachFramePeriod(){
+  return Math.max(15, Math.round(3600 / (currentVTRate || 180)));
+}
+
+function peaFramePeriod(){
+  return Math.max(20, Math.round(3600 / (currentPEARate || 60)));
+}
+
+let vfibPhase = [Math.random()*10, Math.random()*10, Math.random()*10, Math.random()*10, Math.random()*10];
+let vfibFreq = [3.0, 5.5, 9.0, 14.0, 21.0];
+let vfibAmp = [0.4, 0.42, 0.32, 0.24, 0.16];
+let ampDrift = 0;
+
+function vfibValue(t){
+  // gentle envelope drift so amplitude isn't perfectly flat, but stays fairly consistent
+  ampDrift += 0.0012;
+  const modulation = 0.85 + 0.12*Math.sin(ampDrift*0.6) + 0.05*Math.sin(ampDrift*1.7+1);
+  let v = 0;
+  for(let i=0;i<vfibFreq.length;i++){
+    v += vfibAmp[i]*Math.sin((t*vfibFreq[i]) + vfibPhase[i]);
+  }
+  // strong jitter so each vertex is sharp/jagged rather than a smooth curve
+  v += (Math.random()-0.5)*0.5;
+  return v * modulation * vfibAmplitudeMultiplier;
+}
+
+// Monomorphic V-Tach: regular, wide, sine-wave-like complexes at a fast rate —
+// no discernible P wave, no isoelectric segment between beats. Electrically
+// organized (the monitor will show a rate), even though it may be pulseless.
+function vtachValue(phase){
+  let v = Math.sin(phase * 2 * Math.PI) * 1.9;
+  v += (Math.random() - 0.5) * 0.04;
+  return v;
+}
+
+// CPR compression artifact: real compressions create large, ugly deflections
+// on the ECG that make the true underlying rhythm impossible to read — the
+// whole reason a real code needs a brief pause in compressions to check the
+// rhythm. Each spike is now triggered directly by a real compression event
+// from the sensor (cprSpikeFrame set to 0), not a self-running oscillator —
+// so exactly one physical compression produces exactly one spike, however
+// irregularly real compressions land, rather than a fixed periodic pattern.
+let cprArtifactRate = null; // live compressions/min, tracked from the sensor for reference
+let cprSpikeFrame = null; // null = idle between compressions; otherwise frames since the last one was triggered
+const CPR_SPIKE_DURATION_FRAMES = 16; // how many render frames one spike plays out over
+function cprArtifactValue(phase){
+  let v = Math.sin(phase * 2 * Math.PI) * 2.6;
+  v += (Math.random() - 0.5) * 0.9; // heavy noise — deliberately ugly/uninterpretable
+  return v;
+}
+
+// Asystole: no organized electrical activity — a near-flat isoelectric line
+// with only faint baseline wander/noise, no discernible complexes at all.
+function asystoleValue(){
+  return (Math.random() - 0.5) * 0.06;
+}
+
+function gauss(x, mu, sigma, amp){
+  const d = x - mu;
+  return amp * Math.exp(-(d*d)/(2*sigma*sigma));
+}
+
+// PEA (Pulseless Electrical Activity): organized, regular electrical activity
+// (the monitor reads a rate) but with a bizarre, wide, notched complex —
+// deliberately "funky" looking and clearly not a normal sinus complex,
+// with no discernible P wave.
+function peaValue(phase, period){
+  const sig = (frames) => frames / period;
+  const at  = (frames) => frames / period;
+  let v = 0;
+  v += gauss(phase, at(7),  sig(3.2), 1.6);    // wide first hump
+  v -= gauss(phase, at(12), sig(1.8), 0.85);   // notch/dip
+  v += gauss(phase, at(16), sig(2.6), 1.15);   // second, smaller hump (bifid look)
+  v -= gauss(phase, at(24), sig(4.5), 0.55);   // broad, odd inverted after-wave
+  v += (Math.random() - 0.5) * 0.05;
+  return v;
+}
+
+// Simplified PQRST complex as a function of cardiac-cycle phase (0..1).
+// Widths are specified in frames (not fixed cycle-fraction) so P/T wave
+// duration stays physiologically realistic across different heart rates,
+// and are wide enough to render as smooth open humps rather than narrow
+// glow-blurred blobs.
+function nsrEcgValue(phase, period){
+  const sig = (frames) => frames / period; // convert a frame-width to phase-sigma
+  const at  = (frames) => frames / period; // convert a frame-offset to phase-position
+
+  // T wave timing scales with the cycle length (period) so it automatically
+  // shortens at higher heart rates instead of colliding with the next P
+  // wave — proportional to the space actually left after the QRS, rather
+  // than a fixed width that only fits at one heart rate.
+  const qrsEndFrame = 20;
+  const remaining = Math.max(6, period - qrsEndFrame);
+  const tpReserve = remaining * 0.15;      // small isoelectric gap before next P
+  const availableForT = remaining - tpReserve;
+  const stPause = availableForT * 0.25;    // flat ST segment after S dip
+  const tSpan = availableForT * 0.75;      // total visible T-wave width
+  const tSigmaFrames = Math.max(2, tSpan / 4);
+  const tCenterFrames = qrsEndFrame + stPause + tSpan / 2;
+
+  let v = 0;
+  v += gauss(phase, at(5.5),  sig(3.2), 0.55);              // P wave — broad, rounded
+  v -= gauss(phase, at(15.5), sig(0.72), 0.25);             // small Q dip
+  v += gauss(phase, at(17.0), sig(0.88), 2.8);              // large R spike — thinner
+  v -= gauss(phase, at(18.3), sig(0.72), 0.5);              // small S dip
+  v += gauss(phase, at(tCenterFrames), sig(tSigmaFrames), 1.15); // T wave — rate-scaled
+  v += (Math.random()-0.5)*0.02;                            // baseline noise
+  return v;
+}
+
+// A premature ventricular contraction: no preceding P wave, a wide and
+// bizarre QRS (wider and taller than a normal sinus beat, single dominant
+// deflection rather than the crisp narrow R spike), and a T wave that's
+// discordant — opposite polarity from the QRS — which is what actually
+// reads as "ugly" on a real strip rather than just "tall."
+function pvcEcgValue(phase, period){
+  const sig = (frames) => frames / period;
+  const at  = (frames) => frames / period;
+
+  const qrsCenterFrames = 9;
+  const qrsWidthFrames = Math.max(4, period * 0.14); // markedly wider than the ~0.9-frame normal R spike
+  const tCenterFrames = qrsCenterFrames + qrsWidthFrames * 2.4;
+  const tSigmaFrames = Math.max(3, period * 0.12);
+
+  let v = 0;
+  v += gauss(phase, at(qrsCenterFrames), sig(qrsWidthFrames), 3.1);              // wide, tall bizarre R
+  v -= gauss(phase, at(qrsCenterFrames + qrsWidthFrames * 0.95), sig(qrsWidthFrames * 0.55), 1.5); // deep, wide S
+  v -= gauss(phase, at(tCenterFrames), sig(tSigmaFrames), 1.3);                  // discordant (inverted) T wave
+  v += (Math.random()-0.5)*0.035;                                               // slightly noisier — "ugly"
+  return v;
+}
+
+// Simplified plethysmograph pulse for the SpO2 trace once perfusion returns
+function nsrPlethValue(phase){
+  let v = 0;
+  v += gauss(phase, 0.38, 0.09, 1.0);   // main upstroke/pulse
+  v += gauss(phase, 0.58, 0.05, 0.28);  // dicrotic notch bump
+  v += (Math.random()-0.5)*0.02;
+  return v;
+}
+
+// SpO2 during CPR: real pulse oximetry waveforms become a chaotic mess of
+// motion artifact during compressions — no discernible pulse shape at all.
+function spo2ArtifactValue(){
+  return (Math.random() - 0.5) * 2.2;
+}
+
+function nsrFramePeriod(){
+  return Math.max(20, Math.round(3600 / (currentHR || 80)));
+}
+
+// Capnography (CO2) waveform: rounded rectangles rising from the isoelectric
+// line, one per breath, evenly spaced according to the respiratory rate.
+let currentRR = null; // breaths per minute, set once CO2 monitoring is started
+let co2Frame = 0;
+
+const CO2_WAVEFORM_FRAMES = 180; // ~3s at ~60fps — fixed duration of the rise/plateau/fall shape itself, regardless of RR
+
+function co2TotalCycleFrames(){
+  const totalFrames = Math.round(1200 / (currentRR || 16)); // 20 seconds/RR at ~60fps — more breaths visible on screen at once
+  return Math.max(CO2_WAVEFORM_FRAMES + 20, totalFrames); // always leave at least a small gap before the next breath
+}
+
+function smoothstep(edge0, edge1, x){
+  const t = Math.min(Math.max((x - edge0) / (edge1 - edge0), 0), 1);
+  return t * t * (3 - 2 * t);
+}
+
+function capnoValue(phase){
+  const riseStart = 0.04, riseEnd = 0.12, plateauEnd = 0.46, fallEnd = 0.56;
+  let v;
+  if(phase < riseStart){
+    v = 0;
+  } else if(phase < riseEnd){
+    v = smoothstep(riseStart, riseEnd, phase);
+  } else if(phase < plateauEnd){
+    v = 1;
+  } else if(phase < fallEnd){
+    v = 1 - smoothstep(plateauEnd, fallEnd, phase);
+  } else {
+    v = 0;
+  }
+  v += (Math.random() - 0.5) * 0.01; // subtle noise
+  return v;
+}
+
+// Scrolling buffer arrays, one point per pixel column
+let ecgBuffer = new Array(Math.ceil(ecgDims.width)).fill(0);
+let spo2Buffer = new Array(Math.ceil(spo2Dims.width)).fill(0);
+let co2Buffer = new Array(Math.ceil(co2Dims.width)).fill(0);
+
+let t = 0;
+let spo2T = 0;
+
+// Erase-gap sweep effect: monitors draw a small blank gap ahead of the pen (like an oscilloscope)
+let sweepX = 0;
+// CO2 sweeps independently and slower than ECG/SpO2 — 12.5mm/sec vs the
+// shared 25mm/sec (i.e. half the pixel rate: 1.1px/frame vs 2.2px/frame).
+let co2SweepX = 0;
+const gapWidth = 14;
+
+function drawSweepTrace(ctx, width, height, buffer, color, midYFactor, ampScale, sweepPos = sweepX){
+  ctx.clearRect(0,0,width,height);
+
+  // grid-less black background already handled by CSS; just draw trace
+  ctx.lineWidth = 1.4;
+  ctx.strokeStyle = color;
+  ctx.shadowColor = color;
+  ctx.shadowBlur = 1;
+  ctx.beginPath();
+
+  const midY = height*midYFactor;
+
+  for(let x=0; x<width; x++){
+    const idx = x;
+    const val = buffer[idx] || 0;
+    const y = midY - val*ampScale;
+    if(x===0) ctx.moveTo(x,y);
+    else ctx.lineTo(x,y);
+  }
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+
+  // draw the erase gap (small black rectangle) just ahead of the sweep point
+  ctx.clearRect(sweepPos, 0, gapWidth, height);
+}
+
+// Placeholder for the CO2 trace: a simple dashed horizontal line instead of
+// an actual capnography waveform.
+function drawDashedLine(ctx, width, height, color){
+  ctx.clearRect(0,0,width,height);
+  ctx.lineWidth = 1.6;
+  ctx.strokeStyle = color;
+  ctx.setLineDash([7,6]);
+  ctx.beginPath();
+  const midY = height * 0.5;
+  ctx.moveTo(0, midY);
+  ctx.lineTo(width, midY);
+  ctx.stroke();
+  ctx.setLineDash([]);
+}
+
+// Fill every pixel column crossed since the last frame with a linear
+// interpolation between the previous sample and the new one. Without this,
+// at ~2.2px/frame roughly half the pixel columns never get a fresh value
+// and keep stale data from the previous lap around the buffer — which is
+// what produced the spikes jumping off the isoelectric line.
+function fillAcrossPixels(buffer, width, fromX, toX, fromVal, toVal){
+  const startPx = Math.floor(fromX) + 1;
+  const endPx = Math.floor(toX);
+  if(endPx < startPx){
+    buffer[((endPx % width) + width) % width] = toVal;
+    return;
+  }
+  for(let px = startPx; px <= endPx; px++){
+    const idx = ((px % width) + width) % width;
+    const frac = endPx > startPx ? (px - startPx) / (endPx - startPx) : 1;
+    buffer[idx] = fromVal + (toVal - fromVal) * frac;
+  }
+}
+
+// Defibrillation artifact state: when a shock fires, we inject a huge spike
+// followed by a brief isoelectric segment into the scrolling buffer.
+let artifactQueue = []; // values to force into the buffer on upcoming frames, overriding vfibValue
+
+let prevEcgVal = 0;
+let prevSpo2Val = 0;
+let prevCo2Val = 0;
+
+function animate(){
+  checkCanvasSizes();
+
+  const prevSweepX = sweepX;
+  sweepX += 2.2;
+  const prevCo2SweepX = co2SweepX;
+  co2SweepX += 1.1; // 12.5mm/sec — half the ECG/SpO2 sweep speed
+
+  t += 0.35;
+  let realVal;
+  if(currentRhythm === 'nsr'){
+    nsrFrame++;
+    if(nsrFrame - nsrCycleStartFrame >= nsrCyclePeriod){
+      nsrCycleStartFrame = nsrFrame;
+      const baseP = nsrFramePeriod();
+      if(currentScenario === 'arrest' && nsrPendingCompensatoryPause){
+        // the beat right after a PVC — full compensatory pause before the next normal beat
+        nsrCyclePeriod = Math.round(baseP * 1.5);
+        nsrPendingCompensatoryPause = false;
+        nsrIsPvcBeat = false;
+      } else if(currentScenario === 'arrest' && Math.random() < NSR_PVC_CHANCE_PER_BEAT){
+        // premature — arrives early, shorter coupling interval than a normal beat
+        nsrCyclePeriod = Math.round(baseP * 0.85);
+        nsrIsPvcBeat = true;
+        nsrPendingCompensatoryPause = true;
+      } else {
+        nsrCyclePeriod = baseP;
+        nsrIsPvcBeat = false;
+        nsrPendingCompensatoryPause = false; // defensive — Healthy Adult never accrues a pending pause
+      }
+    }
+    const period = nsrCyclePeriod;
+    const phase = (nsrFrame - nsrCycleStartFrame) / period;
+    realVal = nsrIsPvcBeat ? pvcEcgValue(phase, period) : nsrEcgValue(phase, period);
+  } else if(currentRhythm === 'vtach'){
+    vtachFrame++;
+    const period = vtachFramePeriod();
+    const phase = (vtachFrame % period) / period;
+    realVal = vtachValue(phase);
+  } else if(currentRhythm === 'pea'){
+    peaFrame++;
+    const period = peaFramePeriod();
+    const phase = (peaFrame % period) / period;
+    realVal = peaValue(phase, period);
+  } else if(currentRhythm === 'asystole'){
+    realVal = asystoleValue();
+  } else {
+    realVal = vfibValue(t);
+  }
+
+  let val;
+  if(artifactQueue.length > 0){
+    val = artifactQueue.shift();
+  } else if(isCprActive()){
+    // compressions in progress — real compression events override the
+    // display until the trainee stops (whether to check the rhythm, or
+    // because ROSC has been recognized and compressions are no longer
+    // needed). Between compressions there's no active spike, so the trace
+    // sits at a faint baseline rather than a repeating artificial cycle.
+    if(cprSpikeFrame !== null && cprSpikeFrame <= CPR_SPIKE_DURATION_FRAMES){
+      const phase = cprSpikeFrame / CPR_SPIKE_DURATION_FRAMES;
+      val = cprArtifactValue(phase);
+      cprSpikeFrame++;
+    } else {
+      cprSpikeFrame = null;
+      // between compressions -- back to whatever the patient's actual
+      // rhythm is, immediately, rather than a flat gap that reads as
+      // asystole regardless of what's really going on electrically
+      val = realVal;
+    }
+  } else {
+    val = realVal;
+  }
+
+  let spo2Val;
+  let spo2ShowTrace;
+  if(currentScenario === 'healthy'){
+    // Healthy Adult is unaffected by the arrest physiology rework — always
+    // readable once monitoring is started, clean pleth trace throughout.
+    if(spo2On){
+      spo2ShowTrace = true;
+      const period = nsrFramePeriod();
+      const phase = (nsrFrame % period) / period;
+      spo2Val = nsrPlethValue(phase);
+    } else {
+      spo2ShowTrace = false;
+      spo2Val = 0;
+    }
+  } else {
+    const spo2Mode = spo2DisplayMode(); // 'off' | 'flat' | 'jumbled'
+    spo2ShowTrace = spo2Mode !== 'off';
+    if(spo2Mode === 'jumbled'){
+      spo2Val = spo2ArtifactValue();
+    } else if(spo2Mode === 'flat'){
+      spo2Val = spo2FlatlineValue();
+    } else {
+      spo2Val = 0;
+    }
+  }
+
+  let co2Val;
+  if(co2On){
+    co2Frame++;
+    const totalCycle = co2TotalCycleFrames();
+    const posInCycle = co2Frame % totalCycle;
+    if(posInCycle < CO2_WAVEFORM_FRAMES){
+      const localPhase = posInCycle / CO2_WAVEFORM_FRAMES;
+      co2Val = capnoValue(localPhase);
+    } else {
+      co2Val = 0; // flat baseline in the gap before the next breath
+    }
+  } else {
+    co2Val = 0;
+  }
+
+  fillAcrossPixels(ecgBuffer, ecgDims.width, prevSweepX, sweepX, prevEcgVal, val);
+  if(spo2ShowTrace){
+    fillAcrossPixels(spo2Buffer, spo2Dims.width, prevSweepX, sweepX, prevSpo2Val, spo2Val);
+  }
+  if(co2On){
+    fillAcrossPixels(co2Buffer, co2Dims.width, prevCo2SweepX, co2SweepX, prevCo2Val, co2Val);
+  }
+  prevEcgVal = val;
+  prevSpo2Val = spo2Val;
+  prevCo2Val = co2Val;
+
+  if(sweepX >= ecgDims.width){ sweepX -= ecgDims.width; }
+  if(co2SweepX >= co2Dims.width){ co2SweepX -= co2Dims.width; }
+
+  if(padsOn){
+    drawSweepTrace(ecgCtx, ecgDims.width, ecgDims.height, ecgBuffer, '#35e335', 0.5, 13 * currentDeviceScale);
+  } else {
+    drawDashedLine(ecgCtx, ecgDims.width, ecgDims.height, '#35e335');
+  }
+  if(spo2ShowTrace){
+    drawSweepTrace(spo2Dims.ctx || spo2Canvas.getContext('2d'), spo2Dims.width, spo2Dims.height, spo2Buffer, '#4db8ff', 0.5, 20 * currentDeviceScale);
+  } else {
+    drawDashedLine(spo2Dims.ctx || spo2Canvas.getContext('2d'), spo2Dims.width, spo2Dims.height, '#4db8ff');
+  }
+  if(co2On){
+    // waveform amplitude scales with the current EtCO2 reading — a low
+    // reading (e.g. 9) renders as a low-amplitude rectangle, a high one
+    // (e.g. 45) renders much taller
+    const co2Reading = parseInt(co2ValueEl.textContent, 10) || 10;
+    const amplitudeFactor = Math.min(1, Math.max(0.12, co2Reading / 45));
+    drawSweepTrace(co2Dims.ctx || co2Canvas.getContext('2d'), co2Dims.width, co2Dims.height, co2Buffer, '#ffb020', 0.85, co2Dims.height * 0.72 * amplitudeFactor, co2SweepX);
+  } else {
+    drawDashedLine(co2Dims.ctx || co2Canvas.getContext('2d'), co2Dims.width, co2Dims.height, '#ffb020');
+  }
+
+  requestAnimationFrame(animate);
+}
+requestAnimationFrame(animate);
+
+// ================= Energy Select / Charge / Shock controls =================
+const ENERGY_MIN = 20, ENERGY_MAX = 360, ENERGY_STEP = 20;
+const energyLevels = [];
+for(let j=ENERGY_MIN; j<=ENERGY_MAX; j+=ENERGY_STEP) energyLevels.push(j);
+let energyIndex = energyLevels.indexOf(120);
+
+const energySelectRow = document.getElementById('energySelectRow');
+const energyUpBtn = document.getElementById('energyUpBtn');
+const energyDownBtn = document.getElementById('energyDownBtn');
+const energyReadout = document.getElementById('energyReadout');
+const joulesPill = document.getElementById('joulesPill');
+const chargeBtn = document.getElementById('chargeBtn');
+const shockBtn = document.getElementById('shockBtn');
+const analyzeBtn = document.getElementById('analyzeBtn');
+const flashOverlay = document.getElementById('flashOverlay');
+const eventLog = document.getElementById('eventLog');
+const homeBtn = document.getElementById('homeBtn');
+const hintBar = document.getElementById('hintBar');
+// Home opens a menu overlay (SCENARIO). It sits outside the scaled
+// device, so opening it never changes the monitor's size.
+const homeMenuModal = document.getElementById('homeMenuModal');
+function openHomeMenu(){
+  homeMenuModal.classList.add('open');
+}
+function closeHomeMenu(){ homeMenuModal.classList.remove('open'); }
+homeBtn.addEventListener('click', openHomeMenu);
+document.getElementById('homeMenuCloseBtn').addEventListener('click', closeHomeMenu);
+homeMenuModal.addEventListener('click', (e) => {
+  if(e.target === homeMenuModal) closeHomeMenu();
+});
+const hrValueEl = document.getElementById('hrValue');
+const spo2ValueEl = document.getElementById('spo2Value');
+const statusDot = document.getElementById('statusDot');
+const statusBarText = document.getElementById('statusBarText');
+const performanceStatsBar = document.getElementById('performanceStatsBar');
+const performanceStatsEl = document.getElementById('performanceStatsEl');
+
+// The monitor can only show a heart rate once pads are placed — before that
+// (or in a rhythm with no discernible rate, like V-Fib/Asystole) it's dashes.
+function refreshHrDisplay(){
+  if(!padsOn || cprStarted || currentHR === null){
+    hrValueEl.textContent = '---';
+    hrValueEl.classList.add('hr-dashes');
+  } else {
+    hrValueEl.textContent = currentHR;
+    hrValueEl.classList.remove('hr-dashes');
+  }
+}
+
+// initial page-load state: the arrest scenario starts as either VF or VT (either/or)
+if(Math.random() < 0.5){
+  currentRhythm = 'vfib';
+  currentVTRate = null;
+  currentHR = null;
+  refreshHrDisplay();
+  logCodeEvent('SCENARIO START: INITIAL SHOCKABLE CARDIAC ARREST (VENTRICULAR FIBRILLATION)');
+} else {
+  currentRhythm = 'vtach';
+  currentVTRate = 150 + Math.floor(Math.random() * 71); // 150-220 bpm
+  currentHR = currentVTRate;
+  refreshHrDisplay();
+  logCodeEvent(`SCENARIO START: INITIAL SHOCKABLE CARDIAC ARREST (VENTRICULAR TACHYCARDIA, ${currentVTRate} bpm)`);
+}
+
+
+// device state machine: 'idle' -> 'charging' -> 'ready' -> (shock) -> 'idle'
+let deviceState = 'idle';
+let disarmTimer = null;
+let chargeTimeoutId = null;
+
+function logEvent(msg){
+  eventLog.textContent = msg;
+}
+
+function refreshEnergyDisplay(){
+  const j = energyLevels[energyIndex];
+  energyReadout.textContent = j + ' J';
+  joulesPill.textContent = j + 'J';
+}
+refreshEnergyDisplay();
+
+function adjustEnergy(delta){
+  if(deviceState !== 'idle' || aedMode) return; // locked while charging/ready, or permanently in AED mode
+  const newIndex = energyIndex + delta;
+  if(newIndex < 0 || newIndex >= energyLevels.length) return; // clamp at min/max
+  energyIndex = newIndex;
+  refreshEnergyDisplay();
+  logEvent(`${energyLevels[energyIndex]} J SELECTED`);
+}
+
+energyUpBtn.addEventListener('click', () => adjustEnergy(1));
+energyDownBtn.addEventListener('click', () => adjustEnergy(-1));
+
+// ---- Charging window ----
+// Shown on the monitor for the whole charge: target energy, a bar that
+// fills, and the energy stored so far counting up. When charged it switches
+// to "xxxJ Available — Push SHOCK button!" and stays up until the shock is
+// delivered (then "Energy delivered" shows briefly), or the charge is
+// cancelled (speed dial) / auto-disarms / the scenario resets.
+const CHARGE_TIME_MS = 4000;
+const chargeWindowEl = document.getElementById('chargeWindow');
+const chargeBarFillEl = document.getElementById('chargeBarFill');
+const chargeWindowNowEl = document.getElementById('chargeWindowNow');
+let chargeAnimFrame = null;
+function showChargeWindow(targetJ){
+  document.getElementById('chargeWindowMode').textContent = aedMode ? 'AED Mode' : 'Manual Mode';
+  document.getElementById('chargeWindowShocks').textContent = shocksDelivered;
+  document.getElementById('chargeWindowTarget').textContent = targetJ;
+  chargeBarFillEl.style.width = '0%';
+  chargeWindowNowEl.textContent = '0J';
+  if(chargeDeliveredTimeoutId){ clearTimeout(chargeDeliveredTimeoutId); chargeDeliveredTimeoutId = null; }
+  chargeWindowEl.classList.remove('ready', 'delivered'); // a new charge replaces "Energy delivered" at once
+  chargeWindowEl.classList.add('show');
+  const start = performance.now();
+  const tick = (now) => {
+    const frac = Math.min(1, (now - start) / CHARGE_TIME_MS);
+    chargeBarFillEl.style.width = (frac * 100).toFixed(1) + '%';
+    chargeWindowNowEl.textContent = Math.round(targetJ * frac) + 'J';
+    chargeAnimFrame = frac < 1 ? requestAnimationFrame(tick) : null;
+  };
+  chargeAnimFrame = requestAnimationFrame(tick);
+}
+// Fully charged: the window stays up and switches to the "Push SHOCK" view
+// until the shock is delivered or the charge is cancelled / auto-disarms.
+function showChargeReady(targetJ){
+  if(chargeAnimFrame){ cancelAnimationFrame(chargeAnimFrame); chargeAnimFrame = null; }
+  document.getElementById('chargeWindowAvail').textContent = targetJ;
+  chargeWindowEl.classList.add('ready', 'show');
+}
+// After a shock: "Energy delivered" shows briefly, then the window closes.
+const ENERGY_DELIVERED_MS = 2500;
+let chargeDeliveredTimeoutId = null;
+function showEnergyDelivered(){
+  if(chargeAnimFrame){ cancelAnimationFrame(chargeAnimFrame); chargeAnimFrame = null; }
+  chargeWindowEl.classList.remove('ready');
+  chargeWindowEl.classList.add('delivered', 'show');
+  if(chargeDeliveredTimeoutId) clearTimeout(chargeDeliveredTimeoutId);
+  chargeDeliveredTimeoutId = setTimeout(hideChargeWindow, ENERGY_DELIVERED_MS);
+}
+function hideChargeWindow(){
+  if(chargeAnimFrame){ cancelAnimationFrame(chargeAnimFrame); chargeAnimFrame = null; }
+  if(chargeDeliveredTimeoutId){ clearTimeout(chargeDeliveredTimeoutId); chargeDeliveredTimeoutId = null; }
+  chargeWindowEl.classList.remove('show', 'ready', 'delivered');
+}
+
+chargeBtn.addEventListener('click', () => {
+  if(deviceState === 'charging' || deviceState === 'ready') return;
+  if(aedMode && !aedShockAdvised){
+    showScreenAlert('ANALYZE RHYTHM FIRST', 'in-progress');
+    setTimeout(hideScreenAlert, 2000);
+    return;
+  }
+  deviceState = 'charging';
+  energySelectRow.classList.add('locked');
+  chargeBtn.classList.add('charging');
+  chargeBtn.classList.remove('ready');
+  shockBtn.classList.remove('ready');
+  const targetJ = energyLevels[energyIndex];
+  logEvent(`CHARGING TO ${targetJ} J...`);
+
+  const chargeTime = CHARGE_TIME_MS; // ~4 s at any energy
+  showChargeWindow(targetJ);
+
+  chargeTimeoutId = setTimeout(() => {
+    if(deviceState !== 'charging') return; // aborted (e.g. disarmed) mid-charge
+    showChargeReady(targetJ);
+    deviceState = 'ready';
+    chargeBtn.classList.remove('charging');
+    chargeBtn.classList.add('ready');
+    shockBtn.classList.add('ready');
+    logEvent(`READY — ${targetJ} J — PRESS SHOCK TO DELIVER`);
+
+    // auto-disarm after 60s of no shock, matching real defib behavior
+    disarmTimer = setTimeout(() => {
+      if(deviceState === 'ready'){
+        disarmDevice();
+        logEvent('CHARGE DISARMED — SELECT ENERGY TO RECHARGE');
+      }
+    }, 60000);
+  }, chargeTime);
+});
+
+function disarmDevice(){
+  deviceState = 'idle';
+  hideChargeWindow();
+  if(!aedMode){ energySelectRow.classList.remove('locked'); }
+  chargeBtn.classList.remove('charging','ready');
+  shockBtn.classList.remove('ready');
+  if(disarmTimer){ clearTimeout(disarmTimer); disarmTimer = null; }
+  if(chargeTimeoutId){ clearTimeout(chargeTimeoutId); chargeTimeoutId = null; }
+}
+
+// Speed dial doubles as the "dump charge" control — safely discharges a
+// charging/ready shock without delivering it, same as a real defibrillator's
+// disarm function.
+const speedDial = document.getElementById('speedDial');
+// ================= SPEED DIAL: turn to move the selection, press to select =================
+// Drag the ring (or the grey bezel) round like a real knob. Every
+// DIAL_DETENT_DEG of rotation moves the white selection border one box:
+// clockwise = next, counter-clockwise = previous, wrapping at the ends.
+// Order: the four vital boxes top to bottom, then the three waveforms.
+const DIAL_DETENT_DEG = 30;
+const dialAssembly = document.getElementById('dialAssembly');
+const dialRing = document.getElementById('dialRing');
+const dialTargets = [
+  ...document.querySelectorAll('.vitals-col .vital-box'),   // HR, SpO2, CO2, NIBP
+  ...document.querySelectorAll('.traces-col .trace-block'), // ECG, pleth, capnography
+];
+let dialSelIndex = -1;       // -1 = nothing selected yet
+let dialVisualAngle = 0;     // how far the ring is drawn rotated
+let dialDrag = null;         // { pointerId, lastAngle, accum } while a finger is on the ring
+
+function setDialSelection(i){
+  dialTargets.forEach((el, k) => el.classList.toggle('dial-sel', k === i));
+  dialSelIndex = i;
+}
+function stepDialSelection(dir){
+  // While the Events menu is on screen the dial drives the menu instead of
+  // the vital/waveform boxes.
+  if(eventMenuModal.classList.contains('open')){ stepEventHighlight(dir); return; }
+  const n = dialTargets.length;
+  const next = dialSelIndex === -1 ? (dir > 0 ? 0 : n - 1) : (dialSelIndex + dir + n) % n;
+  setDialSelection(next);
+}
+function clearDialSelection(){ setDialSelection(-1); }
+
+function pointerAngleDeg(e){
+  const r = dialRing.getBoundingClientRect(); // centre is unaffected by the ring's own rotation
+  return Math.atan2(e.clientY - (r.top + r.height / 2), e.clientX - (r.left + r.width / 2)) * 180 / Math.PI;
+}
+dialAssembly.addEventListener('pointerdown', (e) => {
+  if(e.target.closest('.dial-center')) return; // centre is a press, not a grab
+  e.preventDefault();
+  dialAssembly.setPointerCapture(e.pointerId);
+  dialDrag = { pointerId: e.pointerId, lastAngle: pointerAngleDeg(e), accum: 0 };
+  dialAssembly.classList.add('dragging');
+});
+dialAssembly.addEventListener('pointermove', (e) => {
+  if(!dialDrag || e.pointerId !== dialDrag.pointerId) return;
+  const a = pointerAngleDeg(e);
+  let d = a - dialDrag.lastAngle;
+  if(d > 180) d -= 360; else if(d < -180) d += 360; // shortest way round across the ±180° seam
+  dialDrag.lastAngle = a;
+  dialVisualAngle += d;
+  dialRing.style.transform = `rotate(${dialVisualAngle}deg)`;
+  dialDrag.accum += d;
+  while(dialDrag.accum >= DIAL_DETENT_DEG){ dialDrag.accum -= DIAL_DETENT_DEG; stepDialSelection(+1); }
+  while(dialDrag.accum <= -DIAL_DETENT_DEG){ dialDrag.accum += DIAL_DETENT_DEG; stepDialSelection(-1); }
+});
+function endDialDrag(e){
+  if(!dialDrag || e.pointerId !== dialDrag.pointerId) return;
+  dialDrag = null;
+  dialAssembly.classList.remove('dragging');
+}
+dialAssembly.addEventListener('pointerup', endDialDrag);
+dialAssembly.addEventListener('pointercancel', endDialDrag);
+
+// Centre press:
+//  - Events menu open: gives the highlighted event (Amiodarone opens its
+//    dose picker). The menu takes priority, so a press meant for an event
+//    never dumps a charge by accident.
+//  - Otherwise, charging/charged: dumps the charge (listener below).
+//  - Otherwise: selects the box with the white border.
+speedDial.addEventListener('click', (e) => {
+  if(eventMenuModal.classList.contains('open')){
+    // This press belongs to the menu only. stopImmediatePropagation keeps it
+    // from reaching the charge-dump listener below, which would otherwise run
+    // after the menu has already closed and dump a charge.
+    e.stopImmediatePropagation();
+    const item = eventMenuModal.querySelector('.event-menu-item.hl');
+    if(item) item.click();
+    return;
+  }
+  if(deviceState === 'charging' || deviceState === 'ready') return;
+  if(dialSelIndex === -1) return;
+  const target = dialTargets[dialSelIndex];
+  target.classList.add('dial-picked');
+  setTimeout(() => target.classList.remove('dial-picked'), 180);
+  target.click(); // SpO2 / CO2 boxes start monitoring; the other boxes have no action yet
+});
+
+speedDial.addEventListener('click', () => {
+  if(deviceState !== 'charging' && deviceState !== 'ready') return;
+  const dumpedJ = energyLevels[energyIndex];
+  disarmDevice();
+  logEvent(`CHARGE DUMPED — ${dumpedJ} J — NOT DELIVERED`);
+  logCodeEvent(`CHARGE DUMPED — ${dumpedJ} J — NOT DELIVERED`);
+  logVitalsSnapshot();
+});
+
+let hrDriftTimeoutId = null;
+
+function scheduleHrDrift(){
+  const delayMs = (8 + Math.random() * 7) * 1000; // 8-15 seconds — quicker than SpO2's drift
+  hrDriftTimeoutId = setTimeout(() => {
+    hrDriftTimeoutId = null;
+    if(currentRhythm !== 'nsr') return; // stopped — don't reschedule
+    const magnitude = 1 + Math.floor(Math.random() * 3); // a few points: 1-3
+    const step = Math.random() < 0.5 ? -magnitude : magnitude;
+    currentHR = Math.min(100, Math.max(60, currentHR + step));
+    refreshHrDisplay();
+    scheduleHrDrift();
+  }, delayMs);
+}
+
+// Decays roscChance once per second based on whether CPR is actively being
+// performed right now, and degrades the rhythm (VT -> VF -> Asystole) as the
+// window closes on an untreated arrest. Driven by the 1s interval below.
+function roscTickOnce(){
+  const quality = careQualityFactor(); // 0 (worst) to 1 (best)
+  const isShockable = (currentRhythm === 'vfib' || currentRhythm === 'vtach');
+  const noCarePerMin = isShockable ? ROSC_DECAY_SHOCKABLE_NO_CARE_PER_MIN : ROSC_DECAY_NONSHOCKABLE_NO_CARE_PER_MIN;
+  const optimalCarePerMin = isShockable ? ROSC_DECAY_SHOCKABLE_OPTIMAL_CARE_PER_MIN : ROSC_DECAY_NONSHOCKABLE_OPTIMAL_CARE_PER_MIN;
+  const decayPerMin = noCarePerMin - quality * (noCarePerMin - optimalCarePerMin);
+  roscChance = Math.max(ROSC_CHANCE_FLOOR, roscChance - decayPerMin / 60);
+
+  if(roscChance <= 40 && vfDegradationStage < 1){
+    vfDegradationStage = 1;
+    currentRhythm = 'vfib';
+    vfibAmplitudeMultiplier = 1.0;
+    currentHR = null;
+    refreshHrDisplay();
+    logEvent('RHYTHM DETERIORATED: Coarse V-Fib (prolonged untreated arrest)');
+    logCodeEvent('RHYTHM DETERIORATED: Coarse V-Fib');
+  }
+  if(roscChance <= 30 && vfDegradationStage < 2){
+    vfDegradationStage = 2;
+    vfibAmplitudeMultiplier = 0.6;
+    logEvent('RHYTHM DETERIORATED: Fine V-Fib (prolonged untreated arrest)');
+    logCodeEvent('RHYTHM DETERIORATED: Fine V-Fib');
+  }
+  if(roscChance <= 20 && vfDegradationStage < 3){
+    vfDegradationStage = 3;
+    vfibAmplitudeMultiplier = 0.35;
+    logEvent('RHYTHM DETERIORATED: Finer V-Fib (prolonged untreated arrest)');
+    logCodeEvent('RHYTHM DETERIORATED: Finer V-Fib');
+  }
+  if(roscChance <= 10 && vfDegradationStage < 4){
+    vfDegradationStage = 4;
+    currentRhythm = 'asystole';
+    currentHR = null;
+    refreshHrDisplay();
+    logEvent('RHYTHM DETERIORATED: Asystole (prolonged untreated arrest)');
+    logCodeEvent('RHYTHM DETERIORATED: Asystole');
+    // NOTE: the tick used to stop here — it no longer does. Epi in
+    // asystole/PEA now rolls against this same live roscChance, so CPR
+    // quality and adherence keep mattering all the way through the
+    // non-shockable zone. See administerEpinephrine().
+  }
+}
+
+function startRoscTick(){
+  if(roscTickIntervalId) return;
+  roscTickIntervalId = setInterval(roscTickOnce, 1000);
+}
+
+function stopRoscTick(){
+  if(roscTickIntervalId){ clearInterval(roscTickIntervalId); roscTickIntervalId = null; }
+}
+
+function convertToNSR(){
+  currentRhythm = 'nsr';
+  currentHR = 65 + Math.floor(Math.random()*26); // 65-90 bpm
+  nsrFrame = 0;
+  nsrCycleStartFrame = 0;
+  nsrCyclePeriod = nsrFramePeriod();
+  nsrIsPvcBeat = false;
+  nsrPendingCompensatoryPause = false;
+  refreshHrDisplay();
+  statusDot.classList.add('nsr');
+  stopRoscTick();
+
+  if(currentScenario === 'arrest'){
+    statusBarText.textContent = 'SCENARIO — INITIAL SHOCKABLE CARDIAC ARREST (ROSC) — TRAINING USE ONLY';
+    logCodeEvent(`ROSC ACHIEVED (HR ${currentHR})`);
+    // EtCO2: 15-25s delay, then a rapid rise to 20-28, then (if ventilated
+    // acceptably) a slow climb to 35-45
+    triggerCo2RoscRise();
+    // SpO2's physiology tick polls currentRhythm itself every second, so the
+    // switch to post-ROSC rules (ventilations-only, higher ceiling) picks up
+    // on its own — no explicit hook needed here.
+
+    // Compressions should stop at ROSC — freeze the compression-fraction
+    // denominator here rather than letting it keep draining afterward.
+    freezeCompressionFraction();
+    stopPerformanceTick();
+    logCodeEvent(`FINAL PERFORMANCE (to ROSC) — Compression Fraction ${compressionFraction().toFixed(0)}%, ACLS Adherence ${adherenceScore.toFixed(0)}/100`);
+    refreshPerformanceDisplay();
+  } else {
+    statusBarText.textContent = 'SCENARIO — HEALTHY ADULT — TRAINING USE ONLY';
+    logCodeEvent(`SCENARIO START: HEALTHY ADULT (HR ${currentHR})`);
+  }
+
+  scheduleHrDrift();
+}
+
+shockBtn.addEventListener('click', () => {
+  if(deviceState !== 'ready') return;
+  // No pads, no shock — like the real monitor. The charge is kept, so the
+  // shock can be delivered as soon as pads are placed (or the charge is
+  // cancelled / auto-disarms after 60 s as usual). Nothing is scored.
+  if(!padsOn){
+    showScreenAlert('CONNECT ELECTRODES', 'no-pulse');
+    setTimeout(hideScreenAlert, 2500);
+    logEvent('SHOCK NOT DELIVERED — CONNECT ELECTRODES (pads not placed)');
+    logCodeEvent('SHOCK NOT DELIVERED — pads not placed');
+    return;
+  }
+  const deliveredJ = energyLevels[energyIndex];
+  showEnergyDelivered(); // Push SHOCK view -> "Energy delivered" briefly, then closes
+
+  // screen flash
+  flashOverlay.classList.remove('flashing');
+  void flashOverlay.offsetWidth; // restart animation
+  flashOverlay.classList.add('flashing');
+
+  // inject a defibrillation artifact into the ECG trace:
+  // a sharp saturating spike followed by a brief isoelectric (flat) segment
+  artifactQueue = [];
+  for(let i=0;i<3;i++) artifactQueue.push(4.5);   // spike up (clips)
+  for(let i=0;i<3;i++) artifactQueue.push(-4.5);  // spike down
+  for(let i=0;i<40;i++) artifactQueue.push((Math.random()-0.5)*0.05); // brief flatline
+
+  shocksDelivered++;
+  document.getElementById('chargeWindowShocks').textContent = shocksDelivered; // count in the "Energy delivered" title bar
+  const shockNow = simNow();
+  const msSincePriorShock = lastShockDeliveredTime !== null ? (shockNow - lastShockDeliveredTime) : null;
+  const tooSoon = msSincePriorShock !== null && msSincePriorShock < SHOCK_MIN_INTERVAL_MS;
+  lastShockDeliveredTime = shockNow;
+  if(aedMode){ aedShockAdvised = false; } // must re-analyze before the next shock
+
+  // ACLS adherence: first shock should go promptly. AED mode has a
+  // mandatory 5s ANALYZE delay before a shock is even possible, so it gets
+  // a tighter/different target (30s) than manual mode (45s).
+  if(shocksDelivered === 1 && cfTrackingStart !== null){
+    const sinceArrestSec = (shockNow - cfTrackingStart) / 1000;
+    const firstShockTargetSec = aedMode ? 30 : 45;
+    if(sinceArrestSec > firstShockTargetSec){
+      adjustAdherence(-15, `First shock delivered at ${sinceArrestSec.toFixed(0)}s — not within the ${firstShockTargetSec}s target`);
+    }
+  }
+
+  // ACLS adherence: subsequent shocks should track the ~2-minute CPR
+  // cycle — good timing is 1:50-2:10 since the previous shock, in either
+  // mode. Falling outside that window (too fast or too slow) hurts adherence.
+  if(shocksDelivered > 1 && msSincePriorShock !== null){
+    const intervalSec = msSincePriorShock / 1000;
+    if(intervalSec < 110 || intervalSec > 130){
+      const mm = Math.floor(intervalSec / 60);
+      const ss = Math.round(intervalSec % 60);
+      const intervalLabel = `${mm}:${String(ss).padStart(2, '0')}`;
+      adjustAdherence(-5, `Shock interval ${intervalLabel} — outside the 1:50-2:10 target`);
+    }
+  }
+
+  // ACLS adherence: no stacked shocks — compressions should resume between
+  // every shock, not just at the end of the whole cycle.
+  if(shocksDelivered > 1 && !cprHappenedSinceLastShock){
+    adjustAdherence(-8, 'Shock delivered with no CPR in between — avoid stacked shocks');
+  }
+  cprHappenedSinceLastShock = false; // reset — startCprFromSensor() will flip this back on when compressions resume
+
+  // the very first shock of any code is always ineffective — guarantees at
+  // least two rounds before ROSC is even possible
+  const isFirstShock = shocksDelivered === 1;
+
+  let converted = false;
+  let shockRoll = null;
+  if(!tooSoon && !isFirstShock && (currentRhythm === 'vfib' || currentRhythm === 'vtach')){
+    shockRoll = Math.random() * 100;
+    converted = shockRoll < roscChance;
+  }
+
+  if(tooSoon){
+    logEvent(`SHOCK DELIVERED — ${deliveredJ} J — INEFFECTIVE (too soon since last shock)`);
+    logCodeEvent(`SHOCK DELIVERED — ${deliveredJ} J — INEFFECTIVE (< 1:45 since last shock)`);
+  } else if(isFirstShock && (currentRhythm === 'vfib' || currentRhythm === 'vtach')){
+    logEvent(`SHOCK DELIVERED — ${deliveredJ} J — INEFFECTIVE (first shock)`);
+    logCodeEvent(`SHOCK DELIVERED — ${deliveredJ} J — INEFFECTIVE (first shock — every code runs at least two rounds)`);
+  } else if(converted){
+    convertToNSR();
+    logEvent(`SHOCK DELIVERED — ${deliveredJ} J — ROSC ACHIEVED (HR ${currentHR})`);
+    logCodeEvent(`SHOCK DELIVERED — ${deliveredJ} J (ROSC chance was ${roscChance.toFixed(1)}%) — ROSC ACHIEVED`);
+  } else if(currentRhythm === 'asystole' || currentRhythm === 'pea'){
+    logEvent(`SHOCK DELIVERED — ${deliveredJ} J — NOT A SHOCKABLE RHYTHM`);
+    logCodeEvent(`SHOCK DELIVERED — ${deliveredJ} J — NOT A SHOCKABLE RHYTHM`);
+  } else {
+    logEvent(`SHOCK DELIVERED — ${deliveredJ} J — RHYTHM UNCHANGED`);
+    logCodeEvent(`SHOCK DELIVERED — ${deliveredJ} J (ROSC chance was ${roscChance.toFixed(1)}%) — rhythm unchanged`);
+  }
+
+  // Note: protocol calls for compressions to resume immediately after
+  // every shock, but displayed CPR state now comes from the real dome
+  // switch sensor rather than an assumption — so this no longer force-sets
+  // cprStarted. If the trainee's hands are actually back on the manikin,
+  // the sensor will report it; if not, the display correctly won't show
+  // CPR in progress.
+
+  if(disarmTimer){ clearTimeout(disarmTimer); disarmTimer = null; }
+  deviceState = 'idle';
+  if(!aedMode){ energySelectRow.classList.remove('locked'); }
+  chargeBtn.classList.remove('charging','ready');
+  shockBtn.classList.remove('ready');
+});
+
+// ANALYZE — AED mode only. After a 5s "analysis" delay, advises whether a
+// shock is indicated (V-Fib/V-Tach) and gates CHARGE accordingly. Must be
+// re-run before every subsequent shock.
+analyzeBtn.addEventListener('click', () => {
+  if(!aedMode) return;
+  if(aedAnalyzePending || deviceState !== 'idle') return;
+  aedAnalyzePending = true;
+  showScreenAlert('ANALYZING RHYTHM...', 'in-progress');
+  aedAnalyzePendingTimeoutId = setTimeout(() => {
+    aedAnalyzePending = false;
+    aedAnalyzePendingTimeoutId = null;
+    const shockable = (currentRhythm === 'vfib' || currentRhythm === 'vtach');
+    aedShockAdvised = shockable;
+    if(shockable){
+      showScreenAlert('SHOCK ADVISED', 'no-pulse');
+      logEvent('AED ANALYSIS — SHOCK ADVISED');
+      logCodeEvent('AED ANALYSIS — SHOCK ADVISED');
+    } else {
+      showScreenAlert('NO SHOCK ADVISED', 'in-progress');
+      logEvent('AED ANALYSIS — NO SHOCK ADVISED');
+      logCodeEvent('AED ANALYSIS — NO SHOCK ADVISED');
+    }
+    logVitalsSnapshot();
+    setTimeout(hideScreenAlert, 3000);
+  }, 5000);
+});
+
+// ================= NIBP =================
+const nibpBtn = document.getElementById('nibpBtn');
+const nibpReadoutEl = document.getElementById('nibpReadout');
+const nibpMapEl = document.getElementById('nibpMap');
+let nibpTimeoutId = null;
+const nibpLight = document.getElementById('nibpLight'); // green while the cuff is cycling
+
+nibpBtn.addEventListener('click', () => {
+  if(currentRhythm !== 'nsr') return;   // no perfusion in VF — no valid reading to take
+  if(nibpTimeoutId) return;             // a measurement is already in progress
+
+  logEvent('NIBP MEASURING...');
+  nibpLight.classList.add('lit'); // cuff cycling
+  const delayMs = (10 + Math.random() * 5) * 1000; // 10-15 seconds
+  nibpTimeoutId = setTimeout(() => {
+    nibpTimeoutId = null;
+    nibpLight.classList.remove('lit'); // cycle finished (or discarded below)
+    if(currentRhythm !== 'nsr') return; // rhythm changed mid-measurement — discard
+    let diastolic, gap, systolic;
+    if(currentScenario === 'arrest'){
+      diastolic = 40 + Math.floor(Math.random() * 21); // 40-60, hypotensive post-ROSC
+      gap = 20 + Math.floor(Math.random() * 11);        // 20-30 point gap
+      systolic = diastolic + gap;                        // 60-90
+    } else {
+      diastolic = 60 + Math.floor(Math.random() * 31);  // 60-90
+      gap = 30 + Math.floor(Math.random() * 11);         // 30-40 point gap
+      systolic = diastolic + gap;                         // 90-130, within 90-140
+    }
+    const map = Math.round(diastolic + (systolic - diastolic) / 3);
+    nibpReadoutEl.textContent = `${systolic}/${diastolic}`;
+    nibpMapEl.textContent = `MAP ${map}`;
+    logEvent(`NIBP: ${systolic}/${diastolic} mmHg (MAP ${map})`);
+    logCodeEvent(`NIBP TAKEN: ${systolic}/${diastolic} (MAP ${map})`);
+    logVitalsSnapshot();
+  }, delayMs);
+});
+
+// ================= SpO2 =================
+// Healthy Adult keeps the old simple behavior (always readable once
+// monitoring starts, gentle drift in 94-99%). The arrest scenario uses an
+// entirely new physiology engine — see the block below.
+const spo2Box = document.getElementById('spo2Box');
+let spo2DriftTimeoutId = null;
+
+function healthySpo2Target(){
+  return 94 + Math.floor(Math.random() * 6); // 94-99
+}
+
+function scheduleSpo2Drift(){
+  const delayMs = (15 + Math.random() * 15) * 1000; // 15-30 seconds
+  spo2DriftTimeoutId = setTimeout(() => {
+    spo2DriftTimeoutId = null;
+    if(!spo2On || currentScenario !== 'healthy') return;
+    let current = parseInt(spo2ValueEl.textContent, 10);
+    if(isNaN(current)) current = 96;
+    const step = Math.random() < 0.5 ? -1 : 1;
+    current = Math.min(99, Math.max(94, current + step));
+    spo2ValueEl.textContent = current;
+    scheduleSpo2Drift();
+  }, delayMs);
+}
+
+// ---- Cardiac arrest SpO2 physiology engine ----
+// Two numbers: an INTERNAL value that updates in real time off the current
+// care state, and a DISPLAYED value that's simply the internal value read
+// back from ~30-45 seconds ago (a fixed delay rolled once per scenario,
+// like a patient's own circulatory transit time). Nothing about the display
+// needs its own scheduling — any change in the internal trajectory shows up
+// automatically, exactly `delay` seconds later, because the display is just
+// a historical lookup.
+//
+// Rules:
+//  - Internal value starts at 40% at scenario start; 40% is also the floor.
+//  - Pre-ROSC: rises only while CPR AND ventilations are both active.
+//    Post-ROSC: ventilations alone are enough to rise or hold.
+//  - A placed airway adds a flat +25% to the rise rate (all four airway
+//    types are equivalent for now).
+//  - The rise rate itself ramps up the longer proper care has been
+//    continuously sustained — starts at the baseline rate and accelerates
+//    toward a cap the longer CPR+vent (or vent alone post-ROSC) keeps
+//    running uninterrupted. This ramp is only reset by an actual fall (see
+//    below) — a brief pause of 10s or less doesn't touch it.
+//  - If CPR and/or ventilations have been stopped for longer than 10
+//    continuous seconds, the internal value falls at 1 point per second,
+//    and the rise-rate ramp resets back to baseline. A stoppage of 10
+//    seconds or less has no effect on the value or the ramp at all.
+//  - Ceiling is a band, not a single fixed number: 73-77% while
+//    non-perfusing (arrest), rising to 84-88% once ROSC is achieved. Once
+//    the value reaches the bottom of the band, it wanders naturally within
+//    it (a +/-1 point step every 3-5s) rather than sitting flat.
+//  - Display (numeric + waveform) is governed purely by the DISPLAYED
+//    value: below 50% it's a constant flatline with no number; 50-59%
+//    flickers randomly between a flatline (no number) and the normal
+//    jumbled trace (number shown), 3-5s per phase; 60%+ is always the
+//    jumbled trace with the number shown.
+let spo2InternalValue = 40;             // real-time value, updates immediately off the current care state
+let spo2DisplayValue = 40;              // what's actually shown — the internal value from ~30-45s ago
+// Ceilings are fixed ranges, not a single randomized number — once the
+// internal value reaches the bottom of the range, it wanders within it
+// (see spo2PhysiologyTick) rather than sitting flat at one fixed value.
+let spo2DisplayDelayMs = 35000;         // this scenario's fixed sensor delay, randomized 30-45s at reset
+let spo2LapseStartTime = null;          // Date.now() when the rise condition most recently became false; null while it holds
+// Continuous seconds of sustained proper care, used to ramp the rise rate
+// up over time. Frozen (untouched) during a brief <=10s pause; reset to 0
+// only when an actual fall occurs.
+let spo2RiseStreakSec = 0;
+// Date.now() of the next scheduled ceiling-wander step; null whenever the
+// value isn't currently parked in its ceiling band.
+let spo2NextCeilingWanderTime = null;
+let spo2History = [];                   // rolling {t, v} samples of the internal value, oldest first
+let spo2TickIntervalId = null;
+
+let spo2FlickerPhase = 'jumbled';       // 'flat' | 'jumbled' — only meaningful while the displayed value is 50-59
+let spo2FlickerTimeoutId = null;
+
+const SPO2_FLOOR = 40;                    // internal value never drops below this
+const SPO2_ARREST_CEILING_MIN = 73;       // ceiling band while non-perfusing (arrest)
+const SPO2_ARREST_CEILING_MAX = 77;
+const SPO2_ROSC_CEILING_MIN = 84;         // ceiling band once ROSC is achieved
+const SPO2_ROSC_CEILING_MAX = 88;
+const SPO2_CEILING_WANDER_MIN_MS = 3000;  // once parked at the ceiling, wander by 1 point every 3-5s
+const SPO2_CEILING_WANDER_RANGE_MS = 2000;
+const SPO2_RISE_RATE_START_PER_SEC = 0.25; // rate at the start of a sustained-care streak
+const SPO2_RISE_RATE_CAP_PER_SEC = 0.75;   // rate reached once the streak hits the full ramp span
+const SPO2_RISE_RAMP_FULL_SEC = 15;       // seconds of continuous good care to go from start rate to cap rate
+const SPO2_AIRWAY_RATE_BONUS = 1.25;      // +25% rate with an airway placed, whichever type
+const SPO2_FALL_RATE_PER_SEC = 1;         // 1 point per second once falling
+const SPO2_FALL_GRACE_SEC = 10;           // stoppages up to this long have no effect at all
+const SPO2_HISTORY_MAX_AGE_MS = 60000;    // a bit more than the max 45s delay, for margin
+
+// The current rise rate: starts at 0.25 points/sec and climbs linearly to
+// 0.75 points/sec over 15s of continuous good care, then holds there.
+// Boosted further on top by a placed airway.
+function spo2CurrentRiseRate(){
+  const rampProgress = Math.min(spo2RiseStreakSec, SPO2_RISE_RAMP_FULL_SEC) / SPO2_RISE_RAMP_FULL_SEC;
+  let rate = SPO2_RISE_RATE_START_PER_SEC + rampProgress * (SPO2_RISE_RATE_CAP_PER_SEC - SPO2_RISE_RATE_START_PER_SEC);
+  if(airwayPlaced) rate *= SPO2_AIRWAY_RATE_BONUS;
+  return rate;
+}
+
+function spo2QualifyingRiseConditionMet(){
+  if(currentRhythm === 'nsr'){
+    return bvmStarted; // post-ROSC: ventilations alone are enough
+  }
+  return cprStarted && bvmStarted; // pre-ROSC: both compressions and ventilations required
+}
+
+function spo2CeilingMin(){
+  return currentRhythm === 'nsr' ? SPO2_ROSC_CEILING_MIN : SPO2_ARREST_CEILING_MIN;
+}
+function spo2CeilingMax(){
+  return currentRhythm === 'nsr' ? SPO2_ROSC_CEILING_MAX : SPO2_ARREST_CEILING_MAX;
+}
+
+// Looks up the internal-value history for the sample at or just before the
+// given timestamp. Before any history exists that far back, returns the
+// earliest known sample — i.e. during the first `delay` seconds of the
+// scenario, the display simply hasn't caught up to anything yet.
+function spo2ValueAtTime(targetT){
+  if(spo2History.length === 0) return spo2InternalValue;
+  if(targetT <= spo2History[0].t) return spo2History[0].v;
+  for(let i = spo2History.length - 1; i >= 0; i--){
+    if(spo2History[i].t <= targetT) return spo2History[i].v;
+  }
+  return spo2History[0].v;
+}
+
+function spo2FlatlineValue(){
+  return (Math.random() - 0.5) * 0.04; // near-dead, essentially flat line
+}
+
+function scheduleSpo2Flicker(){
+  if(spo2FlickerTimeoutId){ clearTimeout(spo2FlickerTimeoutId); spo2FlickerTimeoutId = null; }
+  const durationMs = (3 + Math.random() * 2) * 1000; // 3-5s per phase
+  spo2FlickerTimeoutId = setTimeout(() => {
+    spo2FlickerTimeoutId = null;
+    if(spo2DisplayValue < 50 || spo2DisplayValue >= 60) return; // exited the flicker band — resolved elsewhere
+    spo2FlickerPhase = (spo2FlickerPhase === 'flat') ? 'jumbled' : 'flat';
+    refreshSpo2NumberDisplay();
+    scheduleSpo2Flicker();
+  }, durationMs);
+}
+
+// 'off' (monitoring not started) | 'flat' (below 50%, or mid-flicker below 60%) | 'jumbled' (a real reading)
+function spo2DisplayMode(){
+  if(!spo2On) return 'off';
+  if(spo2DisplayValue < 50) return 'flat';
+  if(spo2DisplayValue >= 60) return 'jumbled';
+  return spo2FlickerPhase;
+}
+
+function refreshSpo2NumberDisplay(){
+  if(currentScenario === 'healthy') return; // handled by the healthy drift path instead
+  spo2ValueEl.textContent = (spo2DisplayMode() === 'jumbled') ? Math.round(spo2DisplayValue) : '--';
+}
+
+function spo2PhysiologyTick(){
+  const now = simNow();
+
+  // ---- advance the internal value in real time ----
+  const ceilingMin = spo2CeilingMin();
+  const ceilingMax = spo2CeilingMax();
+  if(spo2QualifyingRiseConditionMet()){
+    spo2LapseStartTime = null;
+    spo2RiseStreakSec += 1;
+    if(spo2InternalValue >= ceilingMin){
+      // maxed out — take a discrete +/-1 step every 3-5s rather than
+      // sitting flat at one fixed number, always staying within the band
+      if(spo2NextCeilingWanderTime === null){
+        spo2NextCeilingWanderTime = now + SPO2_CEILING_WANDER_MIN_MS + Math.random() * SPO2_CEILING_WANDER_RANGE_MS;
+      } else if(now >= spo2NextCeilingWanderTime){
+        let direction;
+        if(spo2InternalValue <= ceilingMin) direction = 1;
+        else if(spo2InternalValue >= ceilingMax) direction = -1;
+        else direction = Math.random() < 0.5 ? -1 : 1;
+        spo2InternalValue = Math.min(ceilingMax, Math.max(ceilingMin, spo2InternalValue + direction));
+        spo2NextCeilingWanderTime = now + SPO2_CEILING_WANDER_MIN_MS + Math.random() * SPO2_CEILING_WANDER_RANGE_MS;
+      }
+    } else {
+      spo2NextCeilingWanderTime = null; // not parked yet — fresh wander schedule once it gets there
+      const rate = spo2CurrentRiseRate();
+      spo2InternalValue = Math.min(ceilingMax, spo2InternalValue + rate);
+    }
+  } else {
+    if(spo2LapseStartTime === null) spo2LapseStartTime = now;
+    const lapseSec = (now - spo2LapseStartTime) / 1000;
+    if(lapseSec > SPO2_FALL_GRACE_SEC){
+      spo2InternalValue = Math.max(SPO2_FLOOR, spo2InternalValue - SPO2_FALL_RATE_PER_SEC);
+      spo2RiseStreakSec = 0; // an actual fall just happened — the ramp resets
+    }
+    // 10s or less of stoppage: no change to the value, and the ramp is untouched
+  }
+  if(spo2InternalValue > ceilingMax) spo2InternalValue = ceilingMax; // defensive clamp (ceiling only ever rises when ROSC hits)
+  if(spo2InternalValue < SPO2_FLOOR) spo2InternalValue = SPO2_FLOOR;
+
+  // ---- record history, then read back the delayed display value ----
+  spo2History.push({ t: now, v: spo2InternalValue });
+  const cutoff = now - SPO2_HISTORY_MAX_AGE_MS;
+  while(spo2History.length > 1 && spo2History[0].t < cutoff) spo2History.shift();
+  spo2DisplayValue = spo2ValueAtTime(now - spo2DisplayDelayMs);
+
+  // ---- display band management ----
+  if(spo2DisplayValue >= 50 && spo2DisplayValue < 60){
+    if(!spo2FlickerTimeoutId) scheduleSpo2Flicker();
+  } else if(spo2FlickerTimeoutId){
+    clearTimeout(spo2FlickerTimeoutId);
+    spo2FlickerTimeoutId = null;
+  }
+
+  refreshSpo2NumberDisplay();
+}
+
+function startSpo2Tick(){
+  if(spo2TickIntervalId) return;
+  spo2TickIntervalId = setInterval(spo2PhysiologyTick, 1000);
+}
+function stopSpo2Tick(){
+  if(spo2TickIntervalId){ clearInterval(spo2TickIntervalId); spo2TickIntervalId = null; }
+}
+
+spo2Box.addEventListener('click', () => {
+  if(spo2On) return; // already monitoring
+  spo2On = true;
+  if(currentScenario === 'healthy'){
+    const target = healthySpo2Target();
+    spo2ValueEl.textContent = target;
+    logEvent(`SpO2 monitoring started: ${target}%`);
+    logCodeEvent(`SpO2 MONITORING STARTED: ${target}%`);
+    scheduleSpo2Drift();
+  } else {
+    refreshSpo2NumberDisplay();
+    if(spo2DisplayMode() === 'jumbled'){
+      logEvent(`SpO2 monitoring started: ${Math.round(spo2DisplayValue)}%`);
+      logCodeEvent(`SpO2 MONITORING STARTED: ${Math.round(spo2DisplayValue)}%`);
+    } else {
+      logEvent('SpO2 monitoring started: signal too weak to read');
+      logCodeEvent('SpO2 MONITORING STARTED: signal too weak to read');
+    }
+  }
+  logVitalsSnapshot();
+});
+
+// ================= CO2 =================
+const co2Box = document.getElementById('co2Box');
+const co2ValueEl = document.getElementById('co2Value');
+const co2RrEl = document.getElementById('co2Rr');
+let co2DriftTimeoutId = null;
+
+function co2Bounds(){
+  if(currentRhythm === 'nsr'){
+    if(currentScenario === 'healthy') return [35, 45];
+    // post-ROSC in the arrest scenario — ventilation rate quality matters here
+    if(bvmStarted && bvmRate !== null){
+      if(bvmRate < 10) return [58, 62];  // hypoventilation — CO2 retention
+      if(bvmRate > 12) return [23, 27];  // hyperventilation — CO2 blown off
+    }
+    return [35, 45]; // no BVM rate data, or rate is within the 10-12 target
+  }
+  return cprStarted ? [10, 12] : [1, 3];
+}
+
+function computeCo2Target(){
+  const [lo, hi] = co2Bounds();
+  return lo + Math.floor(Math.random() * (hi - lo + 1));
+}
+
+function scheduleCo2Drift(){
+  const delayMs = (15 + Math.random() * 15) * 1000; // 15-30 seconds
+  co2DriftTimeoutId = setTimeout(() => {
+    co2DriftTimeoutId = null;
+    if(!co2On) return; // monitoring stopped — don't reschedule
+    const [lo, hi] = co2Bounds();
+    let current = parseInt(co2ValueEl.textContent, 10);
+    if(isNaN(current)) current = Math.round((lo + hi) / 2);
+    const step = Math.random() < 0.5 ? -1 : 1;
+    current = Math.min(hi, Math.max(lo, current + step));
+    co2ValueEl.textContent = current;
+    scheduleCo2Drift();
+  }, delayMs);
+}
+
+function co2RampStep(){
+  co2RampTimeoutId = null;
+  if(!co2On || co2Target === null) return;
+  let current = parseInt(co2ValueEl.textContent, 10);
+  if(isNaN(current)) current = co2Target;
+  const diff = co2Target - current;
+  if(diff === 0){
+    // already there
+  } else {
+    current += Math.sign(diff); // one point per tick — much slower than before
+  }
+  co2ValueEl.textContent = current;
+  if(current !== co2Target){
+    co2RampTimeoutId = setTimeout(co2RampStep, 3000); // ~3s/point
+  } else {
+    scheduleCo2Drift();
+  }
+}
+
+function setCo2Target(target, delayMs){
+  co2Target = target;
+  if(co2RampTimeoutId){ clearTimeout(co2RampTimeoutId); co2RampTimeoutId = null; }
+  if(co2DriftTimeoutId){ clearTimeout(co2DriftTimeoutId); co2DriftTimeoutId = null; }
+  co2RampTimeoutId = setTimeout(co2RampStep, delayMs || 0);
+}
+
+// Called whenever a condition that affects the CO2 target changes
+// (CPR started, ROSC achieved) — only has a visible effect if already monitoring
+function retargetCo2(delayMs){
+  if(!co2On) return;
+  setCo2Target(computeCo2Target(), delayMs || 0);
+}
+
+// The specific post-ROSC CO2 transition: after a 15-25s delay, EtCO2 jumps
+// rapidly to 20-28, then — only if ventilation is at an acceptable 10-12/min
+// — continues with the (already slow) climb to a final 35-45. If the
+// ventilation rate is off (too fast/slow), it heads to the abnormal target
+// instead, same as any other retarget.
+function triggerCo2RoscRise(){
+  if(!co2On) return;
+  if(co2RampTimeoutId){ clearTimeout(co2RampTimeoutId); co2RampTimeoutId = null; }
+  if(co2DriftTimeoutId){ clearTimeout(co2DriftTimeoutId); co2DriftTimeoutId = null; }
+  const delayMs = 15000 + Math.random() * 10000; // 15-25s
+  co2RampTimeoutId = setTimeout(() => {
+    co2RampTimeoutId = null;
+    if(!co2On) return;
+    const rapidVal = 20 + Math.floor(Math.random() * 9); // 20-28
+    co2ValueEl.textContent = rapidVal;
+    const acceptableVent = !(bvmStarted && bvmRate !== null && (bvmRate < 10 || bvmRate > 12));
+    if(acceptableVent){
+      setCo2Target(computeCo2Target(), 3000); // brief pause, then the slow climb to 35-45
+    } else {
+      setCo2Target(computeCo2Target(), 0); // slow ramp straight to the abnormal target
+    }
+  }, delayMs);
+}
+
+co2Box.addEventListener('click', () => {
+  if(co2On) return; // already monitoring
+  co2On = true;
+  // if a BVM ventilation rate has already been selected, the RR reflects
+  // that set rate rather than a random spontaneous rate
+  currentRR = (bvmStarted && bvmRate !== null) ? bvmRate : 12 + Math.floor(Math.random() * 9);
+  co2RrEl.textContent = `RR ${currentRR}`;
+  const target = computeCo2Target();
+  co2ValueEl.textContent = target;
+  co2Target = target;
+  logEvent(`CO2 monitoring started: ${target} mmHg, RR ${currentRR}`);
+  logCodeEvent(`CO2 MONITORING STARTED: ${target} mmHg, RR ${currentRR}`);
+  logVitalsSnapshot();
+  scheduleCo2Drift();
+});
+
+// ================= EVENT button — timestamped marker =================
+const eventBtn = document.getElementById('eventBtn');
+const eventMenuModal = document.getElementById('eventMenuModal');
+const eventMenuItems = document.querySelectorAll('.event-menu-item[data-event]');
+const pulseCheckRow = document.getElementById('pulseCheckRow');
+const pulseCheckCircle = document.getElementById('pulseCheckCircle');
+const pulseAlertEl = document.getElementById('pulseAlert');
+let pulseAlertTimeoutId = null;
+
+// Shared screen overlay: used both for "action in progress" messages while a
+// timed determinant action is being performed, and for the pulse check result.
+function showScreenAlert(message, cssClass){
+  pulseAlertEl.textContent = message;
+  pulseAlertEl.classList.remove('no-pulse', 'pulse-present', 'in-progress');
+  pulseAlertEl.classList.add(cssClass);
+  pulseAlertEl.classList.add('show');
+}
+function hideScreenAlert(){
+  pulseAlertEl.classList.remove('show');
+}
+
+// EVENT opens the on-screen Events menu (EVENT again closes it). A tap on
+// the screen outside the panel also closes it. Generic is highlighted each
+// time it opens; events are chosen with the speed dial (turn to move the
+// highlight, press the centre to give it) — tapping them does nothing.
+function setMenuHighlight(menuEl, item){
+  menuEl.querySelectorAll('.event-menu-item').forEach((el) => el.classList.toggle('hl', el === item));
+}
+function stepMenuHighlight(menuEl, dir){
+  const items = [...menuEl.querySelectorAll('.event-menu-item')];
+  const cur = items.findIndex((el) => el.classList.contains('hl'));
+  const next = cur === -1 ? 0 : (cur + dir + items.length) % items.length;
+  setMenuHighlight(menuEl, items[next]);
+}
+function setEventHighlight(item){ setMenuHighlight(eventMenuModal, item); }
+eventBtn.addEventListener('click', () => {
+  const opening = !eventMenuModal.classList.contains('open');
+  if(opening) setEventHighlight(eventMenuModal.querySelector('[data-event="Generic"]'));
+  eventMenuModal.classList.toggle('open', opening);
+});
+eventMenuModal.addEventListener('click', (e) => {
+  if(e.target === eventMenuModal) eventMenuModal.classList.remove('open');
+});
+// Turning the speed dial moves the highlight through the events in reading
+// order (down the left column, then the right), wrapping at the ends:
+// Generic, Epinephrine, Lidocaine, Amiodarone 300 mg, Amiodarone 150 mg.
+function stepEventHighlight(dir){ stepMenuHighlight(eventMenuModal, dir); }
+// Epinephrine — effect depends on the rhythm at the moment it's given.
+function administerEpinephrine(){
+  const now = simNow();
+  const priorEpiTime = lastEpiTime; // capture before overwrite, for the interval check below
+  epiCount++;
+
+  // ---- ACLS adherence: timing checks (independent of the physiology roll below) ----
+  if(currentRhythm === 'vfib' || currentRhythm === 'vtach'){
+    if(shocksDelivered < 2){
+      adjustAdherence(-5, `Epinephrine given before the 2nd shock in a shockable rhythm (after shock ${shocksDelivered}) — electricity before epi`);
+    }
+  } else if(currentRhythm === 'asystole' || currentRhythm === 'pea'){
+    if(epiCount === 1){
+      const sinceArrestMin = cfTrackingStart !== null ? (now - cfTrackingStart) / 60000 : 0;
+      if(sinceArrestMin <= 2){
+        adjustAdherence(3, 'First epinephrine given early in a non-shockable rhythm — correct, give as soon as feasible');
+      } else if(sinceArrestMin > 4){
+        adjustAdherence(-4, `First epinephrine delayed to ${sinceArrestMin.toFixed(1)} min in a non-shockable rhythm — should be as soon as feasible`);
+      }
+    }
+  }
+  if(priorEpiTime !== null){
+    const sinceLastMin = (now - priorEpiTime) / 60000;
+    if(sinceLastMin < 2.5){
+      adjustAdherence(-4, `Epinephrine re-dosed after only ${sinceLastMin.toFixed(1)} min (target every 3-5 min)`);
+    } else if(sinceLastMin > 6){
+      adjustAdherence(-2, `Epinephrine interval ${sinceLastMin.toFixed(1)} min — longer than the 3-5 min target`);
+    }
+  }
+  lastEpiTime = now;
+
+  if(currentRhythm === 'vfib' || currentRhythm === 'vtach'){
+    if(Math.random() < 0.5){
+      roscChance = Math.min(100, roscChance + 5);
+      logEvent(`EPINEPHRINE ADMINISTERED — ROSC chance up 5% (now ${roscChance.toFixed(1)}%)`);
+      logCodeEvent(`EPINEPHRINE (dose ${epiCount}) — ROSC chance +5% (now ${roscChance.toFixed(1)}%)`);
+    } else {
+      logEvent('EPINEPHRINE ADMINISTERED — no effect');
+      logCodeEvent(`EPINEPHRINE (dose ${epiCount}) — no effect`);
+    }
+  } else if(currentRhythm === 'asystole'){
+    asystoleEpiDoseCount++;
+    if(asystoleEpiDoseCount >= 3){
+      roscUnsalvageable = true;
+      logEvent(`EPINEPHRINE ADMINISTERED — no effect (3rd asystole dose — no chance of ROSC remains)`);
+      logCodeEvent(`EPINEPHRINE (dose ${epiCount}) — 3rd epi dose given in asystole — no chance of ROSC remains; consider Cessation of Resuscitation`);
+    } else {
+      // acts as a "shock" — rolls directly against the same live roscChance
+      // the VF/pVT zone uses, so CPR quality and adherence during asystole
+      // still move the odds
+      const chanceAtRoll = roscChance;
+      const roll = Math.random() * 100;
+      if(roll < chanceAtRoll){
+        currentRhythm = 'pea';
+        currentPEARate = 40 + Math.floor(Math.random() * 61); // 40-100 bpm
+        currentHR = currentPEARate;
+        peaFrame = 0;
+        refreshHrDisplay();
+        logEvent(`EPINEPHRINE ADMINISTERED — Asystole converted to PEA (${currentPEARate} bpm)`);
+        logCodeEvent(`EPINEPHRINE (dose ${epiCount}, acting as a shock — chance was ${chanceAtRoll.toFixed(1)}%) — Asystole → PEA (${currentPEARate} bpm)`);
+      } else {
+        logEvent(`EPINEPHRINE ADMINISTERED — no effect (remains Asystole, chance was ${chanceAtRoll.toFixed(1)}%)`);
+        logCodeEvent(`EPINEPHRINE (dose ${epiCount}, acting as a shock — chance was ${chanceAtRoll.toFixed(1)}%) — no effect, remains Asystole`);
+      }
+    }
+  } else if(currentRhythm === 'pea'){
+    peaEpiDoseCount++;
+    if(roscUnsalvageable){
+      logEvent('EPINEPHRINE ADMINISTERED — no effect (no chance of ROSC remains)');
+      logCodeEvent(`EPINEPHRINE (dose ${epiCount}) — no chance of ROSC remains, remains PEA`);
+    } else {
+      // same shock-equivalent roll as asystole, but three-way: convert to
+      // fine V-Fib (chance = roscChance), or split the remainder evenly
+      // between staying PEA and reverting to Asystole
+      const chanceAtRoll = roscChance;
+      const remainderHalf = (100 - chanceAtRoll) / 2;
+      const roll = Math.random() * 100;
+      if(roll < chanceAtRoll){
+        // converts to fine V-Fib at 30% — the decay tick picks back up from there
+        currentRhythm = 'vfib';
+        vfibPhase = [Math.random()*10, Math.random()*10, Math.random()*10, Math.random()*10, Math.random()*10];
+        ampDrift = 0;
+        currentHR = null;
+        refreshHrDisplay();
+        roscChance = 30;
+        vfDegradationStage = 2; // fine V-Fib
+        vfibAmplitudeMultiplier = 0.6;
+        startRoscTick(); // defensive — should already be running continuously
+        logEvent('EPINEPHRINE ADMINISTERED — PEA converted to fine V-Fib (ROSC chance 30%)');
+        logCodeEvent(`EPINEPHRINE (dose ${epiCount}, acting as a shock — chance was ${chanceAtRoll.toFixed(1)}%) — PEA → fine V-Fib (ROSC chance 30%)`);
+      } else if(roll < chanceAtRoll + remainderHalf){
+        logEvent('EPINEPHRINE ADMINISTERED — no rhythm change (remains PEA)');
+        logCodeEvent(`EPINEPHRINE (dose ${epiCount}, chance was ${chanceAtRoll.toFixed(1)}%) — no effect, remains PEA`);
+      } else {
+        currentRhythm = 'asystole';
+        currentHR = null;
+        refreshHrDisplay();
+        logEvent('EPINEPHRINE ADMINISTERED — PEA converted to Asystole');
+        logCodeEvent(`EPINEPHRINE (dose ${epiCount}, chance was ${chanceAtRoll.toFixed(1)}%) — PEA → Asystole`);
+      }
+    }
+  } else {
+    logEvent('EPINEPHRINE ADMINISTERED');
+    logCodeEvent(`EPINEPHRINE (dose ${epiCount})`);
+  }
+
+  logVitalsSnapshot();
+}
+
+// Event banner: name + the scenario-timer time it was given. Stays up for
+// EVENT_BANNER_MS, or until the next event replaces it.
+const EVENT_BANNER_MS = 10000;
+const eventBannerEl = document.getElementById('eventBanner');
+let eventBannerTimeoutId = null;
+function showEventBanner(name){
+  document.getElementById('eventBannerName').textContent = name;
+  document.getElementById('eventBannerTime').textContent = clockEl.textContent; // same time Code Summary logs
+  eventBannerEl.classList.add('show');
+  if(eventBannerTimeoutId) clearTimeout(eventBannerTimeoutId);
+  eventBannerTimeoutId = setTimeout(hideEventBanner, EVENT_BANNER_MS);
+}
+function hideEventBanner(){
+  if(eventBannerTimeoutId){ clearTimeout(eventBannerTimeoutId); eventBannerTimeoutId = null; }
+  eventBannerEl.classList.remove('show');
+}
+
+eventMenuItems.forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const label = btn.dataset.event;
+    showEventBanner(label);
+    if(btn.dataset.amioDose){
+      administerAmiodarone(parseInt(btn.dataset.amioDose, 10)); // Amiodarone 300 mg / 150 mg
+    } else if(label === 'Epinephrine'){
+      administerEpinephrine();
+    } else {
+      logEvent(`EVENT: ${label}`);
+      logCodeEvent(label);
+      logVitalsSnapshot();
+    }
+    eventMenuModal.classList.remove('open');
+  });
+});
+
+// Amiodarone — prompts for a dose (300mg / 150mg). Only has a chance to
+// achieve ROSC outright when given in a shockable rhythm; that chance is
+// small and scales down with roscChance as the arrest drags on. No effect
+// at all in a non-shockable rhythm (asystole/PEA).
+// Conversion-chance multiplier by dose order (index 0 = dose 1, index 1 =
+// dose 2+, clamped) — a refractory rhythm that needed a second antiarrhythmic
+// dose is inherently harder to convert, so effectiveness tapers by dose
+// count regardless of which mg value was actually picked.
+const AMIODARONE_CONVERSION_MULTIPLIER = [0.25, 0.15];
+
+function administerAmiodarone(doseMg){
+  amiodaroneCount++;
+
+  // Harvard Mode runs the same automatic-AED functions as the AED scenario,
+  // but this protocol variant doesn't use amiodarone at all — no adherence
+  // checks, no conversion chance, nothing. Everything else about the mode
+  // (auto energy select, mandatory ANALYZE, etc.) is untouched.
+  if(aedMode){
+    logEvent(`AMIODARONE ${doseMg}mg ADMINISTERED — no effect (not used in this protocol)`);
+    logCodeEvent(`AMIODARONE ${doseMg}mg (dose ${amiodaroneCount}) — no effect, not part of this protocol`);
+    logVitalsSnapshot();
+    return;
+  }
+
+  // ---- ACLS adherence: timing + dosing checks (independent of the physiology roll below) ----
+  if(currentRhythm === 'vfib' || currentRhythm === 'vtach'){
+    if(shocksDelivered < 3){
+      adjustAdherence(-6, `Amiodarone given before the 3rd shock (after shock ${shocksDelivered}) — reserved for shock-refractory VF/pVT`);
+    }
+  } else {
+    adjustAdherence(-3, 'Amiodarone given in a non-shockable rhythm — no indication');
+  }
+  if(amiodaroneCount === 1 && doseMg !== 300){
+    adjustAdherence(-4, `First amiodarone dose given as ${doseMg}mg — should be 300mg`);
+  }
+  if(amiodaroneCount >= 3){
+    adjustAdherence(-5, `Amiodarone dose ${amiodaroneCount} given — protocol caps at 2 doses per arrest, no benefit beyond that`);
+  }
+
+  if(currentRhythm === 'vfib' || currentRhythm === 'vtach'){
+    const multIdx = Math.min(amiodaroneCount, AMIODARONE_CONVERSION_MULTIPLIER.length) - 1;
+    const multiplier = AMIODARONE_CONVERSION_MULTIPLIER[multIdx];
+    const chance = roscChance * multiplier; // tapers off with each subsequent dose
+    const roll = Math.random() * 100;
+    if(roll < chance){
+      convertToNSR();
+      logEvent(`AMIODARONE ${doseMg}mg ADMINISTERED — ROSC ACHIEVED (HR ${currentHR})`);
+      logCodeEvent(`AMIODARONE ${doseMg}mg (dose ${amiodaroneCount}, chance was ${chance.toFixed(1)}%) — ROSC ACHIEVED`);
+    } else {
+      logEvent(`AMIODARONE ${doseMg}mg ADMINISTERED — no effect (chance was ${chance.toFixed(1)}%)`);
+      logCodeEvent(`AMIODARONE ${doseMg}mg (dose ${amiodaroneCount}, chance was ${chance.toFixed(1)}%) — no effect`);
+    }
+  } else {
+    logEvent(`AMIODARONE ${doseMg}mg ADMINISTERED`);
+    logCodeEvent(`AMIODARONE ${doseMg}mg (dose ${amiodaroneCount}) — no effect (non-shockable rhythm)`);
+  }
+  logVitalsSnapshot();
+}
+
+// ================= Simulation determinant indicators (left panel) =================
+// Pads, CPR, BVM ventilation rate, and airway are toggled directly from the
+// left panel instead of the EVENT menu, so their current state is always visible.
+const padsIndicatorRow = document.getElementById('padsIndicatorRow');
+const padsIndicatorCircle = document.getElementById('padsIndicatorCircle');
+const bvmIndicatorRow = document.getElementById('bvmIndicatorRow');
+const bvmIndicatorCircle = document.getElementById('bvmIndicatorCircle');
+const bvmIndicatorLabel = document.getElementById('bvmIndicatorLabel');
+const bvmRatePopover = document.getElementById('bvmRatePopover');
+const airwayIndicatorRow = document.getElementById('airwayIndicatorRow');
+const airwayIndicatorCircle = document.getElementById('airwayIndicatorCircle');
+const airwayIndicatorLabel = document.getElementById('airwayIndicatorLabel');
+const airwayPopover = document.getElementById('airwayPopover');
+const cessationRow = document.getElementById('cessationRow');
+const cessationCircle = document.getElementById('cessationCircle');
+
+const pickerBackdrop = document.getElementById('pickerBackdrop');
+function closeAllDeterminantPopovers(){
+  bvmRatePopover.classList.remove('open');
+  airwayPopover.classList.remove('open');
+}
+
+// Lift the three pickers out of the scaled device / event menu into <body>
+// so they show as full-size centered sheets (see .determinant-popover CSS).
+// Their existing button handlers move with them untouched. Taps on the
+// sheet itself no longer bubble into the row that opened it, so a stray
+// tap on the title or padding leaves it open; tapping the dimmed backdrop
+// or Cancel closes it (the backdrop click reaches the document-level
+// close handler below).
+[bvmRatePopover, airwayPopover].forEach((pop) => {
+  document.body.appendChild(pop);
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.className = 'picker-cancel';
+  cancel.textContent = 'Cancel';
+  cancel.addEventListener('click', closeAllDeterminantPopovers);
+  pop.appendChild(cancel);
+  pop.addEventListener('click', (e) => e.stopPropagation());
+  // Backdrop follows whether any picker is open (no :has() needed, so this
+  // also works on older iPad Safari).
+  new MutationObserver(() => {
+    const anyOpen = !!document.querySelector('.determinant-popover.open');
+    pickerBackdrop.classList.toggle('show', anyOpen);
+  }).observe(pop, { attributes: true, attributeFilter: ['class'] });
+});
+
+// Pending timeouts for in-progress actions, so a scenario reset can cancel
+// them cleanly rather than letting a stale action complete later.
+let padsPending = false, padsPendingTimeoutId = null;
+let cprPending = false, cprPendingTimeoutId = null;
+let bvmPending = false, bvmPendingTimeoutId = null;
+let airwayPending = false, airwayPendingTimeoutId = null;
+let pulseCheckPending = false, pulseCheckPendingTimeoutId = null;
+
+// Pads — takes 3s to place; required before the rhythm/HR show on the
+// monitor at all. Removing them is instant.
+padsIndicatorRow.addEventListener('click', () => {
+  if(padsPending) return;
+  if(padsOn){
+    padsOn = false;
+    padsIndicatorCircle.classList.remove('active');
+    logEvent('EVENT: Pads Removed');
+    logCodeEvent('Pads Removed');
+    logVitalsSnapshot();
+    refreshHrDisplay();
+    return;
+  }
+  padsPending = true;
+  padsIndicatorCircle.classList.add('pending');
+  showScreenAlert('PLACING PADS...', 'in-progress');
+  padsPendingTimeoutId = setTimeout(() => {
+    padsPending = false;
+    padsPendingTimeoutId = null;
+    padsIndicatorCircle.classList.remove('pending');
+    hideScreenAlert();
+    padsOn = true;
+    padsIndicatorCircle.classList.add('active');
+    logEvent('EVENT: Pads Placed');
+    logCodeEvent('Pads Placed');
+    logVitalsSnapshot();
+    refreshHrDisplay();
+  }, 3000);
+});
+
+// CPR — no longer a manual toggle. CPR state (cprStarted) is now driven
+// entirely by a real dome-switch sensor module (ESP32 + Prestan manikin's
+// compression switch) over Bluetooth Low Energy. Clicking this row pairs
+// the sensor; after that, the row is a live status readout, not a control
+// — compressions detected by the hardware are what start/stop CPR and
+// override the displayed rhythm with the compression artifact, exactly
+// the way pausing real compressions is what reveals the true rhythm
+// underneath.
+const CPR_SENSOR_SERVICE_UUID = '6a2f1b40-4e30-4a13-9e2a-5f6c7a8b9c00';
+const CPR_SENSOR_CHARACTERISTIC_UUID = '6a2f1b41-4e30-4a13-9e2a-5f6c7a8b9c00';
+let cprSensorConnected = false;
+const btLamp = document.getElementById('btLamp'); // header Bluetooth lamp: green while linked
+let cprSensorDevice = null;
+
+function startCprFromSensor(rate){
+  cprStarted = true;
+  cprArtifactRate = rate || (100 + Math.floor(Math.random() * 21)); // fall back if rate wasn't sent
+  if(cfTrackingStart !== null && cprActiveSegmentStart === null){
+    cprActiveSegmentStart = simNow(); // begin a new compression-fraction segment
+  }
+  cprHappenedSinceLastShock = true;
+  logEvent('EVENT: CPR Started (sensor)');
+  logCodeEvent('CPR Started (sensor)');
+  logVitalsSnapshot();
+  refreshHrDisplay();
+  retargetCo2(0);
+}
+
+function stopCprFromSensor(){
+  if(!cprStarted) return;
+  cprStarted = false;
+  if(cprActiveSegmentStart !== null){
+    compressionActiveMs += simNow() - cprActiveSegmentStart;
+    cprActiveSegmentStart = null;
+  }
+  logEvent('EVENT: CPR Stopped (sensor)');
+  logCodeEvent('CPR Stopped (sensor)');
+  logVitalsSnapshot();
+  refreshHrDisplay();
+  retargetCo2(0);
+}
+
+function handleCprSensorData(event){
+  const text = new TextDecoder('utf-8').decode(event.target.value);
+  let data;
+  try{
+    data = JSON.parse(text);
+  } catch(e){
+    return; // ignore malformed packets
+  }
+
+  if(data.type === 'compression'){
+    const rate = typeof data.rate_cpm === 'number' && data.rate_cpm > 0 ? data.rate_cpm : null;
+    if(!cprStarted){
+      startCprFromSensor(rate);
+    } else if(rate){
+      // already in progress — keep the artifact tracking the real, live
+      // compression rate coming off the dome switch rather than a fixed
+      // randomized rate
+      cprArtifactRate = rate;
+    }
+    // every real compression event triggers exactly one spike, whether
+    // it's the one that started CPR or a later one
+    cprSpikeFrame = 0;
+  } else if(data.type === 'stopped'){
+    stopCprFromSensor();
+  }
+}
+
+function onCprSensorDisconnected(){
+  cprSensorConnected = false;
+  btLamp.classList.remove('connected');
+  cprSensorDevice = null;
+  linkBtn.title = 'Connect the CPR dome-switch sensor over Bluetooth';
+  // link dropped mid-session — there's no way to know the real state
+  // anymore, so fail safe back to "not in progress" rather than leaving a
+  // stale artifact running forever
+  stopCprFromSensor();
+}
+
+async function connectCprSensor(){
+  if(cprSensorConnected) return;
+
+  if(!navigator.bluetooth){
+    showScreenAlert('BLUETOOTH NOT SUPPORTED', 'no-pulse');
+    setTimeout(hideScreenAlert, 2500);
+    return;
+  }
+
+  try{
+    showScreenAlert('CONNECTING SENSOR...', 'in-progress');
+
+    cprSensorDevice = await navigator.bluetooth.requestDevice({
+      filters: [{ services: [CPR_SENSOR_SERVICE_UUID] }]
+    });
+    cprSensorDevice.addEventListener('gattserverdisconnected', onCprSensorDisconnected);
+
+    const server = await cprSensorDevice.gatt.connect();
+    const service = await server.getPrimaryService(CPR_SENSOR_SERVICE_UUID);
+    const characteristic = await service.getCharacteristic(CPR_SENSOR_CHARACTERISTIC_UUID);
+    await characteristic.startNotifications();
+    characteristic.addEventListener('characteristicvaluechanged', handleCprSensorData);
+
+    cprSensorConnected = true;
+    btLamp.classList.add('connected');
+    linkBtn.title = 'CPR sensor connected';
+    showScreenAlert('SENSOR CONNECTED', 'pulse-present');
+    setTimeout(hideScreenAlert, 1500);
+  } catch(err){
+    hideScreenAlert();
+    // picker cancelled or connection failed — leave the button clickable to retry
+    console.warn('CPR sensor connection failed:', err);
+  }
+}
+
+const linkBtn = document.getElementById('linkBtn');
+linkBtn.addEventListener('click', connectCprSensor);
+if(!navigator.bluetooth){
+  // Safari / iOS has no Web Bluetooth. Tapping still shows
+  // BLUETOOTH NOT SUPPORTED on the monitor; the lamp just never turns green.
+  linkBtn.title = 'Sensor link needs desktop Chrome or Edge (no Web Bluetooth on this browser)';
+}
+
+// Cessation of Resuscitation — can be declared at any point during a
+// cardiac arrest scenario; it's the trainee's call, not an automatic outcome.
+cessationRow.addEventListener('click', () => {
+  cessationAnnounced = true;
+  cessationCircle.classList.add('alert-red');
+  showScreenAlert('CESSATION OF RESUSCITATION', 'no-pulse');
+  logEvent('CESSATION OF RESUSCITATION DECLARED');
+  logCodeEvent('CESSATION OF RESUSCITATION DECLARED');
+  logVitalsSnapshot();
+  stopRoscTick();
+  stopSpo2Tick();
+  freezeCompressionFraction();
+  stopPerformanceTick();
+  logCodeEvent(`FINAL PERFORMANCE — Compression Fraction ${compressionFraction().toFixed(0)}%, ACLS Adherence ${adherenceScore.toFixed(0)}/100`);
+  refreshPerformanceDisplay();
+});
+
+// BVM — click opens a rate popover (includes an OFF option). Starting takes
+// 3s; stopping is instant.
+bvmIndicatorRow.addEventListener('click', (e) => {
+  e.stopPropagation();
+  const willOpen = !bvmRatePopover.classList.contains('open');
+  closeAllDeterminantPopovers();
+  if(willOpen) bvmRatePopover.classList.add('open');
+});
+bvmRatePopover.querySelectorAll('[data-bvm-rate]').forEach((btn) => {
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeAllDeterminantPopovers();
+    const raw = btn.dataset.bvmRate;
+    if(raw === 'off'){
+      bvmStarted = false;
+      bvmRate = null;
+      bvmIndicatorCircle.classList.remove('active', 'pending');
+      bvmIndicatorLabel.textContent = 'BVM Vent';
+      logEvent('EVENT: Ventilations via BVM Stopped');
+      logCodeEvent('Ventilations via BVM Stopped');
+      logVitalsSnapshot();
+      if(currentRhythm === 'nsr'){ retargetCo2(0); }
+      return;
+    }
+    if(bvmPending) return;
+    const rate = parseInt(raw, 10);
+    bvmPending = true;
+    bvmIndicatorCircle.classList.remove('active');
+    bvmIndicatorCircle.classList.add('pending');
+    showScreenAlert('STARTING VENTILATIONS...', 'in-progress');
+    bvmPendingTimeoutId = setTimeout(() => {
+      bvmPending = false;
+      bvmPendingTimeoutId = null;
+      bvmStarted = true;
+      bvmRate = rate;
+      currentRR = rate;
+      if(co2On){ co2RrEl.textContent = `RR ${currentRR}`; }
+      bvmIndicatorCircle.classList.remove('pending');
+      bvmIndicatorCircle.classList.add('active');
+      bvmIndicatorLabel.textContent = `BVM Vent (${rate})`;
+      hideScreenAlert();
+      const label = `Ventilations via BVM Started (Rate ${rate}/min)`;
+      logEvent(`EVENT: ${label}`);
+      logCodeEvent(label);
+      logVitalsSnapshot();
+      // ACLS adherence: continuous ventilation target is 10-12/min (one
+      // breath every 5-6 seconds), any airway — all airway types have an
+      // equal effect on adherence at this point; only the rate matters here
+      if(rate < 10 || rate > 12){
+        adjustAdherence(-3, `Ventilation rate set to ${rate}/min — target is continuous 10-12/min for any airway`);
+      } else {
+        adjustAdherence(2, `Ventilation rate set to ${rate}/min — within the 10-12/min target`);
+      }
+      if(currentRhythm === 'nsr'){ retargetCo2(0); }
+    }, 3000);
+  });
+});
+
+// Airway — click opens a type popover (includes an OFF option). Placing
+// takes 3s; removing is instant. NPA/OPA/i-Gel/ET Tube are intentionally
+// equal-weight for now — none of them differ in their effect on SpO2 rise
+// rate or ACLS adherence (only the ventilation RATE matters to adherence,
+// same as airwayPlaced only matters as a boolean to SpO2). Airway and
+// ventilation stay as simple manual determinants for the moment; a more
+// lifelike model (mirroring what the real CPR sensor now does for
+// compressions) is a planned follow-up.
+airwayIndicatorRow.addEventListener('click', (e) => {
+  e.stopPropagation();
+  const willOpen = !airwayPopover.classList.contains('open');
+  closeAllDeterminantPopovers();
+  if(willOpen) airwayPopover.classList.add('open');
+});
+airwayPopover.querySelectorAll('[data-airway]').forEach((btn) => {
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeAllDeterminantPopovers();
+    const type = btn.dataset.airway;
+    if(type === 'off'){
+      airwayPlaced = false;
+      airwayType = null;
+      airwayIndicatorCircle.classList.remove('active', 'pending');
+      airwayIndicatorLabel.textContent = 'Airway';
+      logEvent('EVENT: Airway Removed');
+      logCodeEvent('Airway Removed');
+      logVitalsSnapshot();
+      return;
+    }
+    if(airwayPending) return;
+    airwayPending = true;
+    airwayIndicatorCircle.classList.remove('active');
+    airwayIndicatorCircle.classList.add('pending');
+    showScreenAlert(`PLACING AIRWAY (${type})...`, 'in-progress');
+    airwayPendingTimeoutId = setTimeout(() => {
+      airwayPending = false;
+      airwayPendingTimeoutId = null;
+      airwayPlaced = true;
+      airwayType = type;
+      airwayIndicatorCircle.classList.remove('pending');
+      airwayIndicatorCircle.classList.add('active');
+      airwayIndicatorLabel.textContent = `Airway (${type})`;
+      hideScreenAlert();
+      const label = `Airway Placed: ${type}`;
+      logEvent(`EVENT: ${label}`);
+      logCodeEvent(label);
+      logVitalsSnapshot();
+    }, 3000);
+  });
+});
+
+// clicking anywhere outside a popover closes it
+document.addEventListener('click', () => {
+  closeAllDeterminantPopovers();
+});
+
+// Pulse Check — displays NO PULSE (cardiac arrest rhythm) or PULSE PRESENT
+// (perfusing rhythm) across the monitor screen, then fades after a few seconds.
+pulseCheckRow.addEventListener('click', () => {
+  if(pulseCheckPending) return;
+  pulseCheckPending = true;
+  pulseCheckCircle.classList.add('pending');
+  showScreenAlert('CHECKING PULSE...', 'in-progress');
+  pulseCheckPendingTimeoutId = setTimeout(() => {
+    pulseCheckPending = false;
+    pulseCheckPendingTimeoutId = null;
+    pulseCheckCircle.classList.remove('pending');
+
+    const isArrest = isArrestRhythm(currentRhythm);
+    const message = isArrest ? 'NO PULSE' : 'PULSE PRESENT';
+    showScreenAlert(message, isArrest ? 'no-pulse' : 'pulse-present');
+
+    pulseCheckCircle.classList.remove('active', 'alert-red');
+    pulseCheckCircle.classList.add(isArrest ? 'alert-red' : 'active');
+
+    if(pulseAlertTimeoutId){ clearTimeout(pulseAlertTimeoutId); }
+    pulseAlertTimeoutId = setTimeout(() => {
+      hideScreenAlert();
+      pulseCheckCircle.classList.remove('active', 'alert-red');
+      pulseAlertTimeoutId = null;
+    }, 2500);
+
+    logEvent(`PULSE CHECK: ${message}`);
+    logCodeEvent(`PULSE CHECK: ${message}`);
+    logVitalsSnapshot();
+  }, 3000);
+});
+
+// ================= ON button = Reset / rhythm-select =================
+const onResetBtn = document.getElementById('onResetBtn');
+const scenarioBtn = document.getElementById('scenarioBtn');
+const resetModal = document.getElementById('resetModal');
+const resetNsrBtn = document.getElementById('resetNsrBtn');
+const resetVfibBtn = document.getElementById('resetVfibBtn');
+const resetAedBtn = document.getElementById('resetAedBtn');
+const resetCancelBtn = document.getElementById('resetCancelBtn');
+const screenOffOverlay = document.getElementById('screenOffOverlay');
+
+// ================= POWER STATE =================
+// SCENARIO only picks which scenario will run — it never starts anything
+// by itself. ON is now a real power toggle: screen stays blank (and the
+// controls inert) until it's pressed, at which point whichever scenario
+// is currently selected actually starts. Reselecting a scenario — even
+// while one is already running — powers the monitor back off; the
+// trainee has to press ON again to start the newly-picked one.
+let deviceOn = false;
+let selectedScenario = 'nsr'; // 'nsr' | 'vfib' | 'aed'
+
+function scenarioLabel(sc){
+  if(sc === 'vfib') return 'SCENARIO: CARDIAC ARREST (MANUAL)';
+  if(sc === 'aed') return 'SCENARIO: CARDIAC ARREST (HARVARD MODE)';
+  return 'SCENARIO: HEALTHY ADULT';
+}
+function refreshScenarioBtnLabel(){
+  scenarioBtn.textContent = scenarioLabel(selectedScenario);
+}
+refreshScenarioBtnLabel();
+
+function setDeviceOn(on){
+  deviceOn = on;
+  if(typeof updateWakeLock === 'function') updateWakeLock();
+  if(!on && typeof clearDialSelection === 'function') clearDialSelection();
+  deviceRoot.classList.toggle('powered-off', !deviceOn);
+  onResetBtn.classList.toggle('powered', deviceOn);
+}
+setDeviceOn(false); // starts blank — nothing runs until ON is pressed
+
+// ================= BATTERY =================
+// Header battery drains only while the monitor is on, one bar per
+// BATTERY_MINUTES_PER_BAR of real (wall-clock) on-time, so a full battery
+// lasts 4x that. It's the device's battery, not the patient's, so it carries
+// across scenario resets and only refills on a page reload. At zero bars the
+// outline turns red; the monitor keeps running.
+const BATTERY_MINUTES_PER_BAR = 15;
+const BATTERY_FULL_MS = 4 * BATTERY_MINUTES_PER_BAR * 60 * 1000;
+const batteryIconEl = document.getElementById('batteryIcon');
+const batteryBars = [...batteryIconEl.querySelectorAll('.bar')];
+let batteryUsedMs = 0;
+let batteryLastTick = Date.now();
+function refreshBatteryDisplay(){
+  const remainingFrac = Math.max(0, 1 - batteryUsedMs / BATTERY_FULL_MS);
+  const barsLeft = Math.ceil(remainingFrac * 4 - 1e-9); // a bar goes out once its quarter is fully used
+  batteryBars.forEach((bar) => {
+    bar.classList.toggle('used', Number(bar.dataset.bar) > barsLeft);
+  });
+  batteryIconEl.classList.toggle('empty', barsLeft === 0);
+}
+setInterval(() => {
+  const now = Date.now();
+  if(deviceOn) batteryUsedMs += now - batteryLastTick;
+  batteryLastTick = now;
+  refreshBatteryDisplay();
+}, 1000);
+refreshBatteryDisplay();
+
+function selectScenario(sc){
+  selectedScenario = sc;
+  refreshScenarioBtnLabel();
+  setDeviceOn(false); // reselecting always resets the monitor to off
+}
+
+onResetBtn.addEventListener('click', () => {
+  if(deviceOn) return; // already on — no separate power-off control right now
+  setDeviceOn(true);
+  if(selectedScenario === 'nsr'){
+    resetSimulation('nsr');
+  } else if(selectedScenario === 'vfib'){
+    startArrestScenario('vfib', false);
+  } else if(selectedScenario === 'aed'){
+    startArrestScenario('vfib', true);
+  }
+});
+scenarioBtn.addEventListener('click', () => {
+  closeHomeMenu(); // hand off to the scenario picker
+  resetModal.classList.add('open');
+});
+resetCancelBtn.addEventListener('click', () => {
+  resetModal.classList.remove('open');
+});
+resetModal.addEventListener('click', (e) => {
+  if(e.target === resetModal) resetModal.classList.remove('open');
+});
+resetNsrBtn.addEventListener('click', () => {
+  resetModal.classList.remove('open');
+  selectScenario('nsr');
+});
+
+// Cardiac arrest scenarios start the moment ON is pressed — no dispatch
+// message. Behind the scenes each run still rolls a down time (6-9 min)
+// and whether bystander CPR was in progress; together they set how much
+// of the window to convert has already closed on arrival. The trainee
+// isn't told — they find whatever rhythm is on the monitor. Both values
+// are recorded in the Code Summary for the debrief.
+function startArrestScenario(rhythmParam, isAed){
+  const bystanderCPR = Math.random() < 0.5;
+  const downTime = 6 + Math.floor(Math.random() * 4); // 6-9 minutes
+  resetSimulation(rhythmParam, { downTime, bystanderCPR }, !!isAed);
+}
+
+resetVfibBtn.addEventListener('click', () => {
+  resetModal.classList.remove('open');
+  selectScenario('vfib');
+});
+resetAedBtn.addEventListener('click', () => {
+  resetModal.classList.remove('open');
+  selectScenario('aed');
+});
+
+
+// ================= CODE SUMMARY window =================
+const codeSummaryBtn = document.getElementById('codeSummaryBtn');
+const codeSummaryModal = document.getElementById('codeSummaryModal');
+const codeSummaryCloseBtn = document.getElementById('codeSummaryCloseBtn');
+const codeSummaryEventsList = document.getElementById('codeSummaryEventsList');
+const codeSummaryVitalsBody = document.getElementById('codeSummaryVitalsBody');
+const codeSummaryStatsEl = document.getElementById('codeSummaryStats');
+
+function escapeHtml(str){
+  return String(str).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function renderCodeSummary(){
+  if(cfTrackingStart !== null){
+    codeSummaryStatsEl.style.display = '';
+    codeSummaryStatsEl.innerHTML = `<span><span class="stat-label">Compression Fraction</span>${compressionFraction().toFixed(0)}%</span><span><span class="stat-label">ACLS Adherence</span>${adherenceScore.toFixed(0)}/100</span>`;
+  } else {
+    codeSummaryStatsEl.style.display = 'none';
+    codeSummaryStatsEl.innerHTML = '';
+  }
+  codeSummaryEventsList.innerHTML = codeSummaryEvents.map(e =>
+    `<li><span class="t">${escapeHtml(e.time)}</span><span>${escapeHtml(e.label)}</span></li>`
+  ).join('');
+  codeSummaryVitalsBody.innerHTML = vitalsSnapshots.map(v =>
+    `<tr><td>${escapeHtml(v.time)}</td><td>${escapeHtml(v.hr)}</td><td>${escapeHtml(v.spo2)}</td><td>${escapeHtml(v.nibp)}</td><td>${escapeHtml(v.co2)}</td></tr>`
+  ).join('');
+}
+
+codeSummaryBtn.addEventListener('click', () => {
+  renderCodeSummary();
+  codeSummaryModal.classList.add('open');
+});
+codeSummaryCloseBtn.addEventListener('click', () => {
+  codeSummaryModal.classList.remove('open');
+});
+codeSummaryModal.addEventListener('click', (e) => {
+  if(e.target === codeSummaryModal) codeSummaryModal.classList.remove('open');
+});
+
+function resetSimulation(rhythm, dispatchInfo, isAed){
+  // restart the scenario stopwatch from zero
+  simTimeOffsetMs = 0;
+  scenarioStartTime = simNow();
+  updateClock();
+
+  stopRoscTick();
+  roscChance = 100;
+  vfDegradationStage = 0;
+  vfibAmplitudeMultiplier = 1.0;
+  cessationAnnounced = false;
+  cessationCircle.classList.remove('alert-red');
+  lastShockDeliveredTime = null;
+  shocksDelivered = 0;
+  epiCount = 0;
+  lastEpiTime = null;
+  amiodaroneCount = 0;
+  asystoleEpiDoseCount = 0;
+  peaEpiDoseCount = 0;
+  roscUnsalvageable = false;
+
+  // ---- ACLS Adherence & Compression Fraction reset ----
+  stopPerformanceTick();
+  compressionActiveMs = 0;
+  cprActiveSegmentStart = null;
+  cfTrackingStart = null;
+  cfFrozenElapsedMs = null;
+  nextCfCheckpointAt = null;
+  cprHappenedSinceLastShock = true;
+  adherenceScore = 100;
+  refreshPerformanceDisplay(); // hides the pill until a new arrest scenario starts tracking
+
+  // AED mode state
+  aedMode = !!isAed;
+  aedShockAdvised = false;
+  if(aedAnalyzePendingTimeoutId){ clearTimeout(aedAnalyzePendingTimeoutId); aedAnalyzePendingTimeoutId = null; }
+  aedAnalyzePending = false;
+
+  // clear any pending pulse-check alert
+  if(pulseAlertTimeoutId){ clearTimeout(pulseAlertTimeoutId); pulseAlertTimeoutId = null; }
+  pulseAlertEl.classList.remove('show');
+  pulseCheckCircle.classList.remove('active', 'alert-red');
+
+  // start a fresh code summary for this scenario
+  codeSummaryEvents = [];
+  vitalsSnapshots = [];
+  logCodeEvent('POWER ON');
+
+  // stop any in-progress charge cycle and clear the shock circuit
+  disarmDevice();
+  artifactQueue = [];
+  ecgBuffer = new Array(ecgBuffer.length).fill(0);
+  spo2Buffer = new Array(spo2Buffer.length).fill(0);
+  co2Buffer = new Array(co2Buffer.length).fill(0);
+  sweepX = 0;
+  prevEcgVal = 0;
+  prevSpo2Val = 0;
+  prevCo2Val = 0;
+  co2Frame = 0;
+  currentRR = null;
+
+  // cancel any in-progress NIBP measurement and clear its readout
+  if(nibpTimeoutId){ clearTimeout(nibpTimeoutId); nibpTimeoutId = null; }
+  nibpLight.classList.remove('lit');
+  if(typeof hideEventBanner === 'function') hideEventBanner(); // new scenario: clear the last event banner
+  nibpReadoutEl.textContent = '-- / --';
+  nibpMapEl.textContent = 'MAP --';
+
+  // turn off SpO2/CO2 monitoring and clear their readouts back to placeholders
+  if(spo2DriftTimeoutId){ clearTimeout(spo2DriftTimeoutId); spo2DriftTimeoutId = null; }
+  if(co2DriftTimeoutId){ clearTimeout(co2DriftTimeoutId); co2DriftTimeoutId = null; }
+  if(co2RampTimeoutId){ clearTimeout(co2RampTimeoutId); co2RampTimeoutId = null; }
+  if(hrDriftTimeoutId){ clearTimeout(hrDriftTimeoutId); hrDriftTimeoutId = null; }
+  spo2On = false;
+  co2On = false;
+  co2Target = null;
+
+  // reset the SpO2 physiology engine — actual value/ceilings/delay are
+  // (re)seeded below for arrest scenarios; Healthy Adult doesn't use this
+  // engine at all
+  stopSpo2Tick();
+  if(spo2FlickerTimeoutId){ clearTimeout(spo2FlickerTimeoutId); spo2FlickerTimeoutId = null; }
+  spo2InternalValue = SPO2_FLOOR;
+  spo2DisplayValue = SPO2_FLOOR;
+  spo2LapseStartTime = null;
+  spo2RiseStreakSec = 0;
+  spo2NextCeilingWanderTime = null;
+  spo2History = [];
+  spo2FlickerPhase = 'jumbled';
+  padsOn = false;
+  cprStarted = false;
+  cprArtifactRate = null;
+  cprSpikeFrame = null;
+  bvmStarted = false;
+  bvmRate = null;
+  airwayPlaced = false;
+  airwayType = null;
+
+  // cancel any in-flight determinant actions (pads/CPR/BVM/airway/pulse check)
+  // so a stale action can't complete after the scenario has already reset
+  if(padsPendingTimeoutId){ clearTimeout(padsPendingTimeoutId); padsPendingTimeoutId = null; }
+  if(cprPendingTimeoutId){ clearTimeout(cprPendingTimeoutId); cprPendingTimeoutId = null; }
+  if(bvmPendingTimeoutId){ clearTimeout(bvmPendingTimeoutId); bvmPendingTimeoutId = null; }
+  if(airwayPendingTimeoutId){ clearTimeout(airwayPendingTimeoutId); airwayPendingTimeoutId = null; }
+  if(pulseCheckPendingTimeoutId){ clearTimeout(pulseCheckPendingTimeoutId); pulseCheckPendingTimeoutId = null; }
+  padsPending = false;
+  cprPending = false;
+  bvmPending = false;
+  airwayPending = false;
+  pulseCheckPending = false;
+  hideScreenAlert();
+
+  padsIndicatorCircle.classList.remove('active', 'pending');
+  bvmIndicatorCircle.classList.remove('active', 'pending');
+  bvmIndicatorLabel.textContent = 'BVM Vent';
+  airwayIndicatorCircle.classList.remove('active', 'pending');
+  airwayIndicatorLabel.textContent = 'Airway';
+  closeAllDeterminantPopovers();
+  spo2ValueEl.textContent = '--';
+  co2ValueEl.textContent = '--';
+  co2RrEl.textContent = 'RR --';
+
+  if(rhythm === 'vfib'){
+    currentScenario = 'arrest';
+    nsrFrame = 0;
+    nsrCycleStartFrame = 0;
+    nsrCyclePeriod = 20;
+    nsrIsPvcBeat = false;
+    nsrPendingCompensatoryPause = false;
+    vfibPhase = [Math.random()*10, Math.random()*10, Math.random()*10, Math.random()*10, Math.random()*10];
+    ampDrift = 0;
+    vtachFrame = 0;
+    spo2ValueEl.textContent = '--';
+    statusDot.classList.remove('nsr');
+
+    // SpO2 physiology: start at the 40% floor, randomize this run's fixed
+    // display delay, and start the tick — it runs continuously in the
+    // background from here on, independent of whether the SpO2 box has
+    // been clicked to monitor it. Ceilings are fixed constants (see the
+    // engine block above), not randomized per scenario.
+    spo2InternalValue = SPO2_FLOOR;
+    spo2DisplayValue = spo2InternalValue;       // nothing in history yet — display starts in sync
+    spo2DisplayDelayMs = (30 + Math.random() * 15) * 1000; // 30-45s, fixed for this scenario
+    startSpo2Tick();
+    const modeLabel = aedMode ? 'CARDIAC ARREST (HARVARD MODE)' : 'CARDIAC ARREST (MANUAL MODE)';
+    statusBarText.textContent = `SCENARIO — ${modeLabel} — TRAINING USE ONLY`;
+
+    // AED mode: energy is fixed/auto-selected, not trainee-adjustable
+    if(aedMode){
+      energyIndex = energyLevels.indexOf(200);
+      if(energyIndex === -1) energyIndex = Math.floor(energyLevels.length / 2);
+      refreshEnergyDisplay();
+      energySelectRow.classList.add('locked');
+    } else {
+      energySelectRow.classList.remove('locked');
+    }
+
+    // down time + bystander CPR before arrival already eat into the window
+    if(dispatchInfo){
+      const decayRatePerMin = dispatchInfo.bystanderCPR ? 5 : 10;
+      roscChance = Math.max(ROSC_CHANCE_FLOOR, 100 - dispatchInfo.downTime * decayRatePerMin);
+      logCodeEvent(`ARRIVAL (not shown to trainee): ${dispatchInfo.downTime} min down time, bystander CPR ${dispatchInfo.bystanderCPR ? 'in progress' : 'not in progress'} — starting ROSC chance ${roscChance.toFixed(1)}%`);
+    } else {
+      roscChance = 100;
+    }
+
+    // ACLS Adherence & Compression Fraction tracking starts now — CF is
+    // measured from when the trainee can act, not the pre-arrival down time.
+    cfTrackingStart = simNow();
+    nextCfCheckpointAt = cfTrackingStart + 120000;
+    startPerformanceTick();
+    refreshPerformanceDisplay();
+
+    // either/or — VF or VT, chosen at random for this run
+    if(Math.random() < 0.5){
+      currentRhythm = 'vfib';
+      currentVTRate = null;
+      currentHR = null;
+      refreshHrDisplay();
+      logEvent(`SIMULATION RESET — ${modeLabel}`);
+      logCodeEvent(`SCENARIO START: ${modeLabel} (VENTRICULAR FIBRILLATION)`);
+    } else {
+      currentRhythm = 'vtach';
+      currentVTRate = 150 + Math.floor(Math.random() * 71); // 150-220 bpm
+      currentHR = currentVTRate; // the monitor reads the electrical rate even though it's pulseless
+      refreshHrDisplay();
+      logEvent(`SIMULATION RESET — ${modeLabel}`);
+      logCodeEvent(`SCENARIO START: ${modeLabel} (VENTRICULAR TACHYCARDIA, ${currentVTRate} bpm)`);
+    }
+    startRoscTick();
+  } else {
+    currentScenario = 'healthy';
+    aedMode = false;
+    energySelectRow.classList.remove('locked');
+    convertToNSR();
+    logEvent(`SIMULATION RESET — HEALTHY ADULT (HR ${currentHR})`);
+  }
+}
+
+// ================= APP SHELL: full screen, keep-awake, offline =================
+// Full screen: for use inside Chrome/Edge before (or instead of) installing.
+// Installed from the home screen, the app already opens full screen, so the
+// button hides itself there.
+const fullscreenBtn = document.getElementById('fullscreenBtn');
+const fsSupported = !!(document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen);
+function isFullscreenNow(){ return !!(document.fullscreenElement || document.webkitFullscreenElement); }
+function refreshFullscreenBtn(){
+  const installedFullscreen = window.matchMedia('(display-mode: fullscreen)').matches && !isFullscreenNow();
+  fullscreenBtn.style.display = (!fsSupported || installedFullscreen) ? 'none' : '';
+  fullscreenBtn.textContent = isFullscreenNow() ? 'EXIT FULL SCREEN' : 'FULL SCREEN';
+}
+fullscreenBtn.addEventListener('click', async () => {
+  closeHomeMenu();
+  try{
+    if(isFullscreenNow()){
+      await (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+    } else {
+      const el = document.documentElement;
+      await (el.requestFullscreen || el.webkitRequestFullscreen).call(el, { navigationUI: 'hide' });
+      // keep the monitor sideways where the browser allows it (full screen only)
+      if(screen.orientation && screen.orientation.lock){ screen.orientation.lock('landscape').catch(() => {}); }
+    }
+  } catch(err){ /* browser refused — nothing to undo */ }
+});
+document.addEventListener('fullscreenchange', refreshFullscreenBtn);
+document.addEventListener('webkitfullscreenchange', refreshFullscreenBtn);
+refreshFullscreenBtn();
+
+// Keep-awake: while the monitor is ON the tablet screen won't dim or lock
+// mid-scenario. Released when the monitor is off. Where the browser doesn't
+// support it, the device's normal sleep timer applies.
+var screenWakeLock = null; // var (not let): setDeviceOn() can call updateWakeLock() before this line runs at startup
+async function updateWakeLock(){
+  if(!('wakeLock' in navigator)) return;
+  try{
+    if(deviceOn && document.visibilityState === 'visible' && !screenWakeLock){
+      screenWakeLock = await navigator.wakeLock.request('screen');
+      screenWakeLock.addEventListener('release', () => { screenWakeLock = null; });
+    } else if(!deviceOn && screenWakeLock){
+      await screenWakeLock.release();
+      screenWakeLock = null;
+    }
+  } catch(err){ screenWakeLock = null; }
+}
+document.addEventListener('visibilitychange', updateWakeLock); // the lock drops when the app is backgrounded — re-take it on return
+
+// Offline: when hosted (https or localhost) a service worker caches the app
+// so it opens without a connection after the first visit. Skipped when the
+// file is opened directly from storage.
+if('serviceWorker' in navigator && /^https?:$/.test(location.protocol)){
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  });
+}
+</script>
+
+</body>
+</html>
